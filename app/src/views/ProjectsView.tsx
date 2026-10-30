@@ -174,8 +174,10 @@ function ProjectRow({
           {pretty(project.path, home)}
         </span>
       </div>
-      <EngineChip project={project} install={install} />
-      <span className="row-meta" title={project.opened ? 'Last opened' : 'Added'}>
+      <div className="cell cell-engine">
+        <EngineChip project={project} install={install} />
+      </div>
+      <span className="cell cell-time row-meta" title={project.opened ? 'Last opened' : 'Added'}>
         {ago(project.opened ?? project.added)}
       </span>
       <div className="row-actions">
@@ -214,7 +216,7 @@ function EngineChip({ project, install }: { project: Project; install: Install |
       return (
         <button
           className="chip chip-warn"
-          title={`Voxear ${status.version} isn't installed`}
+          title={job ? `Installing Voxear ${status.version}` : `Voxear ${status.version} isn't installed`}
           disabled={Boolean(job)}
           onClick={(event) => {
             event.stopPropagation()
@@ -222,7 +224,7 @@ function EngineChip({ project, install }: { project: Project; install: Install |
           }}
         >
           <Icon name={job ? 'download' : 'alert'} size={12} strokeWidth={2} />
-          {job ? `Installing ${status.version}` : `Install ${status.version}`}
+          {job ? 'Installing…' : `Install ${status.version}`}
         </button>
       )
     }

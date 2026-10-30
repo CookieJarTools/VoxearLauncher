@@ -173,6 +173,7 @@ kbd {
 /* ---------- Main area ---------- */
 
 .main {
+  container: main / inline-size;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -500,16 +501,75 @@ select.input option {
   color: var(--text-faint);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
-  min-width: 84px;
-  text-align: right;
+}
+
+/* Fixed-width cells, so chips, badges and times start at the same place in every row and read as columns. */
+.cell {
+  flex: none;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.cell-engine {
+  width: 172px;
+}
+
+.cell-channel {
+  width: 76px;
+}
+
+.cell-tag {
+  width: 124px;
+}
+
+.cell-size {
+  width: 64px;
+  justify-content: flex-end;
+}
+
+.cell-time {
+  width: 104px;
+  justify-content: flex-end;
+}
+
+.cell-action {
+  width: 156px;
+  justify-content: flex-end;
+}
+
+/* Every control in an action column is the same width, so their edges line up too. */
+.cell-action > * {
+  width: 100%;
+  justify-content: center;
+}
+
+/* Narrow windows drop the times first, so names keep their room. */
+@container main (max-width: 720px) {
+  .cell-time {
+    display: none;
+  }
+
+  .cell-engine {
+    width: 148px;
+  }
 }
 
 .row-actions {
+  flex: none;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 4px;
+  /* The same width with or without an Open button, so the columns before it don't move. */
+  width: 92px;
   opacity: 0;
   transition: opacity var(--t-fast) var(--ease-out);
+}
+
+/* Rows whose actions never change width don't need the room. */
+.row-actions.compact {
+  width: auto;
 }
 
 .row:hover .row-actions,

@@ -138,23 +138,25 @@ function ReleaseRow({ release }: { release: Release }) {
           )}
         </span>
       </div>
-      {release.installed ? (
-        <span className="chip chip-faint">
-          <Icon name="check" size={12} strokeWidth={2.2} />
-          Installed
-        </span>
-      ) : release.needsNewerLauncher ? (
-        <span className="chip chip-warn" title="This release needs a newer launcher">
-          Update the launcher first
-        </span>
-      ) : job ? (
-        <span className="chip">{job.state === 'queued' ? 'Waiting' : 'Installing…'}</span>
-      ) : (
-        <button className="btn btn-sm" onClick={() => queueInstall(release.version)}>
-          <Icon name="download" size={14} />
-          Install
-        </button>
-      )}
+      <div className="cell cell-action">
+        {release.installed ? (
+          <span className="chip chip-faint">
+            <Icon name="check" size={12} strokeWidth={2.2} />
+            Installed
+          </span>
+        ) : release.needsNewerLauncher ? (
+          <span className="chip chip-warn" title="This release needs a newer launcher; update the launcher first">
+            Needs a newer launcher
+          </span>
+        ) : job ? (
+          <span className="chip">{job.state === 'queued' ? 'Waiting' : 'Installing…'}</span>
+        ) : (
+          <button className="btn btn-sm" onClick={() => queueInstall(release.version)}>
+            <Icon name="download" size={14} />
+            Install
+          </button>
+        )}
+      </div>
     </div>
   )
 }

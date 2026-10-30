@@ -98,7 +98,7 @@ function JobCard({ job }: { job: Job }) {
         <strong>{job.state === 'failed' ? `Couldn't install ${job.label}` : `Installing ${job.label}`}</strong>
         {job.state !== 'failed' && <span className="job-phase">{phaseText(job.progress, job.state === 'queued')}</span>}
       </div>
-      <div className="row-actions" style={{ opacity: 1 }}>
+      <div className="row-actions compact" style={{ opacity: 1 }}>
         {job.state === 'failed' ? (
           <>
             <button className="btn btn-sm" onClick={() => queueAgain(job.key)}>
@@ -137,21 +137,22 @@ function InstallRow({ install, index, size, home }: { install: Install; index: n
         <Icon name="cube" size={17} style={{ color: `var(--${install.channel})` }} />
       </div>
       <div className="row-main">
-        <span className="row-name" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          Voxear {install.version}
-          <ChannelBadge channel={install.channel} />
-          {install.located && <span className="tag">Located</span>}
-          {install.missing && <span className="chip chip-warn">Folder not found</span>}
-        </span>
+        <span className="row-name">Voxear {install.version}</span>
         <span className="row-path" title={install.path}>
           {pretty(install.path, home)}
         </span>
       </div>
-      <span className="row-meta">{size !== undefined ? bytes(size) : ''}</span>
-      <span className="row-meta" title={install.installed ? 'Installed' : undefined}>
+      <div className="cell cell-channel">
+        <ChannelBadge channel={install.channel} />
+      </div>
+      <div className="cell cell-tag">
+        {install.missing ? <span className="chip chip-warn">Folder not found</span> : install.located && <span className="tag">Located</span>}
+      </div>
+      <span className="cell cell-size row-meta">{size !== undefined ? bytes(size) : ''}</span>
+      <span className="cell cell-time row-meta" title={install.installed ? 'Installed' : undefined}>
         {install.installed ? ago(install.installed) : install.located ? 'Built elsewhere' : ''}
       </span>
-      <div className="row-actions" style={{ opacity: 1 }}>
+      <div className="row-actions compact" style={{ opacity: 1 }}>
         <button className="icon-btn" title="More" onClick={(event) => menuAt(event, menu)}>
           <Icon name="more" size={18} strokeWidth={2.4} />
         </button>

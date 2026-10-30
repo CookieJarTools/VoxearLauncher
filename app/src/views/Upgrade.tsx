@@ -139,8 +139,12 @@ function Upgrade({ project }: { project: Project }) {
                       <span className="release-version" style={{ flex: 1 }}>
                         Voxear {c.version}
                       </span>
-                      <ChannelBadge channel={c.channel} />
-                      {c.missing ? <span className="chip chip-warn">Folder not found</span> : RELATION[c.direction] && <span className="tag">{RELATION[c.direction]}</span>}
+                      <span className="cell cell-channel">
+                        <ChannelBadge channel={c.channel} />
+                      </span>
+                      <span className="cell cell-tag">
+                        {c.missing ? <span className="chip chip-warn">Folder not found</span> : RELATION[c.direction] && <span className="tag">{RELATION[c.direction]}</span>}
+                      </span>
                     </button>
                   ))}
                 </div>
