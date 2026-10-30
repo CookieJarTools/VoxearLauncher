@@ -1,0 +1,21 @@
+[package]
+name = "voxup"
+description = "The Voxear Launcher command line: install engine versions, manage and create projects"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "voxup"
+path = "src/main.rs"
+
+[dependencies]
+voxear_launcher.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+console.workspace = true
+indicatif.workspace = true
+semver.workspace = true

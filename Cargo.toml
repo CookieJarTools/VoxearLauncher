@@ -1,0 +1,40 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# std::fs::File::lock, used for the install store lock.
+rust-version = "1.89"
+license = "PolyForm-Shield-1.0.0"
+repository = "https://github.com/CookieJarTools/VoxearLauncher"
+publish = false
+
+[workspace.dependencies]
+voxear_launcher = { path = "crates/voxear_launcher" }
+
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+console = "0.16"
+dirs = "7"
+indicatif = "0.18"
+jiff = { version = "0.2", features = ["serde"] }
+minisign-verify = "0.3"
+semver = { version = "1", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+tar = { version = "0.4", default-features = false }
+toml = "0.9"
+zstd = "0.13"
+
+# Dev only: signs test fixtures.
+minisign = "0.9"
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
