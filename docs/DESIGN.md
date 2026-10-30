@@ -194,9 +194,15 @@ version = "0.3.0"
 channel = "stable"
 platform = "linux-x86_64"
 commit = "0ffa698"          # optional
+
+[supports]                  # the launcher contracts this install's vox implements, and their formats
+new = 1                     # vox new, and the format of vox new --describe
+upgrade = 1                 # vox upgrade
 ```
 
-The launcher reads this file and never runs anything to find out what an install is.
+The launcher reads this file and never runs anything to find out what an install is. A contract missing from
+`[supports]` means the install doesn't have that command; every engine built before the contract existed is
+treated that way.
 
 ## Install layout
 
@@ -285,7 +291,7 @@ Each project in the list has one status:
 |---|---|---|
 | Ready | its engine version | Open |
 | Engine missing | "needs Voxear 0.2.0" | Install 0.2.0, then open |
-| Not pinned | "not pinned" | Choose a version (the pin is written by `vox upgrade`; see below) |
+| Not pinned | "not pinned" | Pin it to a version (see "Changing a project's engine version") |
 | Missing | "folder not found" | Locate or remove from list |
 | Unreadable | the parse error | Show the file |
 
@@ -296,17 +302,76 @@ touches its files.
 with `VOXEAR_HOME` set. If the version isn't installed, it offers to install it first (`voxup open --install`).
 The editor arrives at M3, so for now opening explains that the version has no editor.
 
-**Upgrading (planned).** Moving a project to another engine version:
-1. Make sure the target version is installed.
-2. **Back up the project first**: a `.tar.zst` of the project folder in `backups/<project>/<time>-<old version>.tar.zst`
-   in the launcher folder. It leaves out regenerable folders (`.voxear/`, `bin/`, `obj/`). The window lists
-   backups with Restore and Show buttons.
-3. Run the target version's `vox upgrade <folder> --from <old> --json`. That migrates the project files and
-   rewrites `engine`, printing NDJSON events. Each `{"event":"change","message":…}` becomes a line in the
-   summary.
-4. Show the summary, with links to the release notes of every version in between (from the manifest's `notes`).
+### Changing a project's engine version
 
-Moving to an older version is refused unless asked for explicitly, with a warning that it may not open.
+Moving a project to another installed version (or pinning one that has none) works the same from the window
+(the project's menu, or its "Not pinned" chip) and from the command line:
+
+```bash
+voxup upgrade <folder> --to <version> [--install] [--allow-downgrade]
+```
+
+1. **Choose.** The window lists the installed versions marked Newer, Older or Current. It preselects the newest
+   stable version that moves the project forward, and links the release notes of every version in between (the
+   manifest's `notes`).
+2. **Refuse the risky case.** Moving to the version the project is on is refused. Moving to an older one is
+   refused unless it's asked for: `--allow-downgrade`, or the window's "Downgrade anyway" toggle beside a warning.
+3. **Back up.** The project is backed up first (below), with progress.
+4. **Convert.**
+   - If the target lists `upgrade` in `[supports]`, the launcher runs its `vox upgrade` (below), which converts
+     the project and rewrites `engine`.
+   - If it doesn't, the launcher changes only the `engine` line in `voxear.toml`, keeping the rest of the file,
+     comments included. It then says plainly that nothing else was converted.
+5. **Check.** Afterwards, `voxear.toml` must be pinned to the target version, or the upgrade counts as failed.
+6. **Summarise.** The window shows each change, where the backup is (with Show), and an **Open** button. The
+   changes are also saved with the backup.
+
+When anything fails after the backup, the error ends with where the backup is, so nothing is ever lost.
+
+### `vox upgrade <folder> …`
+
+```
+vox upgrade <folder> [--from <version>] --json
+```
+
+- Converts the project at `<folder>` from `--from` to this `vox`'s own version, and sets `engine` to it.
+  `--from` is left out for a project that wasn't pinned.
+- It prints one JSON object per line on stdout, as `vox new` does:
+
+  ```
+  {"event":"step","message":"Converting scenes"}
+  {"event":"change","message":"Converted 4 scenes to the new scene format"}
+  {"event":"done"}
+  ```
+
+  Each `change` is a line in the summary the user sees, so it should say what changed, in plain words. On failure
+  it prints `{"event":"error","message":"…"}` and exits with a non-zero code. The launcher has already backed the
+  project up, but `vox upgrade` should still leave the project as it was if it fails.
+
+### Backups
+
+A backup is a `.tar.zst` of the project folder in `backups/<name>-<hash of path>/<UTC time>.tar.zst`, in the
+launcher folder, with a `.toml` beside it:
+
+```toml
+project = "Orbit"
+path = "/home/jeo/Games/Orbit"
+from = "0.2.0"              # left out when the project wasn't pinned
+to = "0.3.0"
+created = "2026-10-30T17:25:10Z"
+size = 50331648
+files = 318
+changes = ["Converted 4 scenes to the new scene format"]
+```
+
+- **Left out:**
+  - what can be rebuilt: `.voxear/`, `bin/` and `obj/` beside a `.csproj`, and `.vs/`
+  - `.git/`, which is history already
+  - links, which are listed as skipped
+- **Restoring never overwrites.** It unpacks the backup into a new folder beside the project, such as
+  `Orbit (before 0.3.0)`, and adds that to the project list. The project it came from isn't touched.
+- **Backups are kept until deleted**, from the window's Backups dialog. On the command line, `voxup backups` lists
+  them and `voxup restore <archive>` restores one.
 
 ## New-project flow
 
@@ -452,7 +517,8 @@ testing the core never needs Node.
   - A list with fuzzy search (`/` focuses it, arrow keys move, `Enter` opens) and favourites first.
   - Each row has a coloured initial, the path, an engine-version chip and the time it was last opened.
   - A missing version shows an amber **Install 0.2.0** chip that queues the install.
-  - Each row has a menu: open, show in files, favourite, remove from list.
+  - Each row has a menu: open, show in files, favourite, change engine version, backups, remove from list.
+  - A "Not pinned" chip opens the pin dialog.
   - **New project** is the primary button and **Add** the secondary one.
 - **Installs:**
   - Each version shows its channel badge, size on disk, when it was installed, and a "Located" tag where it
@@ -473,6 +539,9 @@ testing the core never needs Node.
   - The name and folder are checked as they're typed. Ctrl+Enter creates the project, and the steps stream in
     from `vox new`.
   - When it's done, the project is selected in the list, and a toast offers **Open**.
+- **Change engine version:** the installed versions marked Newer, Older or Current, with release notes, then the
+  backup's progress, the steps from `vox upgrade`, and a summary of what changed. A downgrade needs its own toggle.
+- **Backups:** each one's versions, age, size and recorded changes, with **Restore a copy**, Show and Delete.
 - **Settings:** the release source, extra trusted keys, the folder new projects go in, and where the launcher
   keeps its files.
 
@@ -498,7 +567,6 @@ testing the core never needs Node.
 **Still to come in the window:**
 - self-update and its sidebar card
 - the command-line shim setting
-- changing a project's engine version, with a backup (see "Upgrading")
 - template thumbnails from the engine
 
 ## Settings and environment
@@ -527,8 +595,8 @@ These are the engine-side parts of the contract. The launcher stubs them in its 
 1. **Pin the version.** Add `engine` (an exact semver version) to `[project]` in `voxear.toml`, as
    `ProjectInfo.engine: Option<String>`. `vox new` writes its own version there. `vox run` and the editor warn
    when it differs from their own version.
-2. **Write `engine.toml`** at the root of every install and release archive (format, version, channel, platform,
-   commit).
+2. **Write `engine.toml`** at the root of every install and release archive: format, version, channel, platform,
+   commit, and `[supports]` listing the contracts its `vox` implements (`new = 1`, `upgrade = 1`).
 3. **Find the install from the executable.** When `VOXEAR_HOME` is unset, `vox` should use the folder above its
    own `bin/` (`current_exe()`), instead of `CARGO_MANIFEST_DIR`. `core_assembly()` should look in
    `<home>/managed/` for installs, and keep `target/managed/<configuration>/` for source checkouts.
@@ -544,9 +612,10 @@ These are the engine-side parts of the contract. The launcher stubs them in its 
    - Add a `[[release]]` entry to `releases.toml`, with a newer `generated` time.
    - Sign the manifest.
    - Publish the manifest, the archives and every `.minisig` together.
-8. **Later:** `voxear-editor --project <folder>` (M3), and `vox upgrade <folder> --from <version> --json` for
-   project migrations.
-9. **Nice to have:** a command that builds an install folder from a source checkout (with `engine.toml`), so
+8. **`vox upgrade`**, as defined under "Changing a project's engine version": it converts the project, rewrites
+   `engine`, and reports each change as NDJSON. Until an engine has it, the launcher changes only the pin.
+9. **Later:** `voxear-editor --project <folder>` (M3).
+10. **Nice to have:** a command that builds an install folder from a source checkout (with `engine.toml`), so
    `voxup locate` can use a development build of the engine.
 
 ## Open questions
@@ -561,7 +630,7 @@ These are the engine-side parts of the contract. The launcher stubs them in its 
    source must be configured.
 2. **Who holds the signing keys,** and where: offline, or as CI secrets.
 3. **Windows code signing** for the launcher installer, so SmartScreen doesn't warn.
-4. **Backups:** how many to keep per project, and whether they can live inside the project folder instead.
+4. **Backups:** whether to delete old ones on their own after a while. For now they are kept until deleted.
 5. **The Jar:** whether the launcher should also appear in The Jar's catalogue.
 
 ## Status
@@ -577,4 +646,4 @@ These are the engine-side parts of the contract. The launcher stubs them in its 
 | Opening projects | Done; waits for the editor (M3) |
 | Launcher window (Tauri): projects, installs, new project, settings, palette | Done; commands tested through IPC |
 | Self-update | Planned |
-| Project upgrades with backups | Planned |
+| Changing engine versions, with backups and restore | Done, tested; the conversion itself waits for `vox upgrade` |

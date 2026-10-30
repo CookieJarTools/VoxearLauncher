@@ -176,3 +176,56 @@ fn creates_and_manages_a_project() {
     assert_eq!(fixture.ok("list_projects", json!({})), json!([]));
     assert!(std::path::Path::new(&path).join("voxear.toml").is_file(), "removing never deletes files");
 }
+
+/// Upgrades through IPC: the choices, the upgrade with its backup, and restoring the backup.
+#[cfg(unix)]
+#[test]
+fn upgrades_a_project_and_restores_its_backup() {
+    let fixture = Fixture::new();
+    fixture.trust_the_fake_releases();
+    fixture.ok("install", json!({ "version": "0.1.0", "onProgress": channel(1) }));
+    fixture.ok("install", json!({ "version": "0.2.0", "onProgress": channel(1) }));
+    let path = fixture
+        .ok("create_project", json!({ "version": "0.1.0", "form": fixture.form("Orbit"), "onStep": channel(2) }));
+
+    let choices = fixture.ok("upgrade_choices", json!({ "path": path }));
+    assert_eq!(choices["current"], "0.1.0");
+    let directions: Vec<_> = choices["choices"].as_array().unwrap().iter().map(|c| c["direction"].clone()).collect();
+    assert_eq!(directions, [json!("upgrade"), json!("current")]);
+
+    let report = fixture.ok(
+        "upgrade_project",
+        json!({ "path": path, "version": "0.2.0", "allowDowngrade": false, "onEvent": channel(3) }),
+    );
+    assert_eq!(report["from"], "0.1.0");
+    assert_eq!(report["to"], "0.2.0");
+    assert_eq!(report["migrated"], true);
+    assert_eq!(report["changes"].as_array().unwrap().len(), 2);
+    assert!(report["backup"]["size"].as_u64().unwrap() > 0);
+    assert_eq!(fixture.ok("list_projects", json!({}))[0]["engine"], "0.2.0");
+
+    let error = fixture
+        .call(
+            "upgrade_project",
+            json!({ "path": path, "version": "0.1.0", "allowDowngrade": false, "onEvent": channel(3) }),
+        )
+        .unwrap_err();
+    assert!(error["message"].as_str().unwrap().contains("has to be asked for"), "{error}");
+
+    let backups = fixture.ok("list_backups", json!({ "path": path }));
+    assert_eq!(backups.as_array().unwrap().len(), 1);
+    assert_eq!(backups[0]["changes"], report["changes"]);
+    let archive = backups[0]["archive"].clone();
+
+    let restored = fixture.ok("restore_backup", json!({ "archive": archive }));
+    assert!(restored.as_str().unwrap().ends_with("Orbit (before 0.2.0)"), "{restored}");
+    assert_eq!(fixture.ok("list_projects", json!({})).as_array().unwrap().len(), 2, "the copy is listed");
+
+    fixture.ok("delete_backup", json!({ "archive": archive }));
+    assert_eq!(fixture.ok("list_backups", json!({ "path": null })), json!([]));
+    assert_eq!(
+        fixture.ok("release_notes", json!({ "from": "0.1.0", "to": "0.2.0" })),
+        json!([]),
+        "the fakes have no notes"
+    );
+}

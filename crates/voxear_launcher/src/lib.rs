@@ -5,10 +5,12 @@
 //! - [`store`]: engine versions installed side by side, verified before they are unpacked.
 //! - [`registry`]: the project list, and which engine version each project needs.
 //! - [`new_project`]: the new-project flow, which runs the chosen engine's own `vox new`.
+//! - [`upgrade`]: moving a project to another engine version, with a [`backup`] first.
 //!
 //! The formats are described in `docs/DESIGN.md`.
 
 pub mod archive;
+pub mod backup;
 pub mod channel;
 pub mod engine;
 pub mod fetch;
@@ -23,6 +25,8 @@ pub mod releases;
 pub mod settings;
 pub mod signing;
 pub mod store;
+pub mod upgrade;
+
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 

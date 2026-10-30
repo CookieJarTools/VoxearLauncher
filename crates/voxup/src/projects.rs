@@ -95,7 +95,7 @@ pub fn open(launcher: &Launcher, folder: &Path, install_missing: bool) -> Result
     Ok(())
 }
 
-fn install_exact(launcher: &Launcher, version: &str) -> Result<Install> {
+pub fn install_exact(launcher: &Launcher, version: &str) -> Result<Install> {
     let selector: Selector = version.parse()?;
     let releases = launcher.releases()?;
     let platform = launcher.store.platform();

@@ -4,6 +4,7 @@
 mod engines;
 mod projects;
 mod ui;
+mod upgrades;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -64,6 +65,18 @@ enum Command {
     },
     /// Create a project with an engine version's `vox new`.
     New(projects::NewArgs),
+    /// Move a project to another engine version, backing it up first. Also pins a project that has none.
+    Upgrade(upgrades::UpgradeArgs),
+    /// List project backups, newest first.
+    Backups {
+        /// Only this project's backups.
+        folder: Option<PathBuf>,
+    },
+    /// Restore a backup into a new folder beside its project. Nothing is overwritten.
+    Restore {
+        /// The backup's archive, as `voxup backups` shows it.
+        backup: PathBuf,
+    },
     /// Show the templates, setup and IDEs an engine version offers for new projects.
     Templates {
         /// The engine version to ask (default: the newest stable one installed).
@@ -95,6 +108,9 @@ fn run(cli: Cli) -> Result<()> {
         Command::Remove { folder } => projects::remove(&launcher, &folder),
         Command::Open { folder, install } => projects::open(&launcher, &folder, install),
         Command::New(args) => projects::new(&launcher, args),
+        Command::Upgrade(args) => upgrades::upgrade(&launcher, args),
+        Command::Backups { folder } => upgrades::backups(&launcher, folder.as_deref()),
+        Command::Restore { backup } => upgrades::restore(&launcher, &backup),
         Command::Templates { engine } => projects::templates(&launcher, engine.as_deref()),
     }
 }

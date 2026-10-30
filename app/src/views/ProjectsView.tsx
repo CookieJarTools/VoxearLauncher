@@ -138,6 +138,9 @@ function ProjectRow({
     { label: 'Show in files', icon: 'folder', run: () => void reveal(project.path) },
     { label: project.favourite ? 'Unfavourite' : 'Favourite', icon: 'star', run: () => void toggleFavourite(project) },
     'divider',
+    { label: project.engine ? 'Change engine version…' : 'Pin to an engine version…', icon: 'cube', run: () => useStore.getState().openUpgrade(project) },
+    { label: 'Backups…', icon: 'archive', run: () => useStore.getState().openBackups(project) },
+    'divider',
     { label: 'Remove from list', icon: 'trash', danger: true, run: () => void removeProject(project) }
   ]
   const ready = project.status.kind === 'ready'
@@ -224,7 +227,18 @@ function EngineChip({ project, install }: { project: Project; install: Install |
       )
     }
     case 'unpinned':
-      return <span className="chip chip-faint">Not pinned</span>
+      return (
+        <button
+          className="chip chip-faint"
+          title="Pin it to an engine version"
+          onClick={(event) => {
+            event.stopPropagation()
+            useStore.getState().openUpgrade(project)
+          }}
+        >
+          Not pinned
+        </button>
+      )
     case 'missing':
       return <span className="chip chip-warn">Folder not found</span>
     case 'unreadable':

@@ -6,6 +6,7 @@
 //!   located.toml             engines installed elsewhere that the launcher was pointed at
 //!   projects.toml            the project list
 //!   settings.toml            launcher settings
+//!   backups/<project>/       project backups, made before a project changes engine version
 //!   cache/                   the last verified release manifest, for offline use
 //!   downloads/               archives while they download
 //!   staging/                 archives while they unpack, renamed into engines/ when complete
@@ -60,6 +61,10 @@ impl Layout {
 
     pub fn settings_file(&self) -> PathBuf {
         self.root.join("settings.toml")
+    }
+
+    pub fn backups(&self) -> PathBuf {
+        self.root.join("backups")
     }
 
     pub fn cache(&self) -> PathBuf {

@@ -24,6 +24,8 @@ const PATHS = {
   info: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 11v5M12 8h.01',
   link: 'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1',
   file: 'M6 3h8l4 4v14H6zM14 3v4h4',
+  archive: 'M4 8h16v12H4zM3 4h18v4H3zM10 12h4',
+  arrowRight: 'M5 12h14M13 6l6 6-6 6',
   spinner: 'M12 3a9 9 0 1 0 9 9',
   command: 'M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3z',
   winMin: 'M5 12h14',

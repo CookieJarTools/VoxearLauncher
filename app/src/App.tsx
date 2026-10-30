@@ -8,6 +8,7 @@ import { InstallsView } from './views/InstallsView'
 import { NewProject } from './views/NewProject'
 import { ProjectsView } from './views/ProjectsView'
 import { SettingsView } from './views/SettingsView'
+import { BackupsDialog, UpgradeDialog } from './views/Upgrade'
 
 export default function App() {
   const view = useStore((s) => s.view)
@@ -69,6 +70,8 @@ export default function App() {
       </div>
       <NewProject />
       <InstallSheet />
+      <UpgradeDialog />
+      <BackupsDialog />
       <Palette />
       <Confirm />
       <Menu />

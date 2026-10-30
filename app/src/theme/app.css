@@ -1054,6 +1054,145 @@ select.input option {
   color: var(--ok);
 }
 
+/* ---------- Upgrades and backups ---------- */
+
+.upgrade {
+  width: min(560px, 92vw);
+  max-height: min(640px, 88vh);
+}
+
+.choice {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 12px;
+  border-radius: var(--r-md);
+  text-align: left;
+  transition: background var(--t-fast) var(--ease-out), box-shadow var(--t-fast) var(--ease-out);
+}
+
+.choice:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.choice.on {
+  background: var(--accent-dim);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+
+.choice:disabled {
+  opacity: 0.55;
+}
+
+.radio {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--line-strong);
+  transition: box-shadow var(--t-med) var(--ease-out);
+}
+
+.choice.on .radio {
+  box-shadow: inset 0 0 0 5px var(--accent);
+}
+
+.notes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: var(--text-sm);
+}
+
+.summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: start;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0 var(--sp-3);
+  animation: rise var(--t-slow) var(--ease-out);
+}
+
+.summary-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.summary-title svg {
+  color: var(--ok);
+}
+
+.changes {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+}
+
+.changes li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text-dim);
+  user-select: text;
+}
+
+.changes li svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--ok);
+}
+
+.backup-line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  justify-self: stretch;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: var(--r-md);
+  background: var(--surface);
+  font-size: var(--text-sm);
+  color: var(--text-dim);
+}
+
+.backup-line span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.backups {
+  width: min(600px, 92vw);
+  max-height: min(600px, 86vh);
+}
+
+.backup {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 4px var(--sp-3);
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  transition: background var(--t-fast) var(--ease-out);
+  animation: fade var(--t-slow) var(--ease-out) both;
+}
+
+.backup:hover {
+  background: var(--hover);
+}
+
+.backup .changes {
+  grid-column: 1 / 3;
+  font-size: var(--text-sm);
+}
+
 /* ---------- Install sheet ---------- */
 
 .install-sheet {

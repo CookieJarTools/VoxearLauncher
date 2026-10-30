@@ -1,7 +1,9 @@
 //! What the commands send to the window, shaped for the UI: camelCase, with times and paths as text.
 
 use serde::{Deserialize, Serialize};
+use voxear_launcher::backup::Backup;
 use voxear_launcher::new_project::NewProject;
+use voxear_launcher::upgrade::{Direction, Event, Report};
 use voxear_launcher::{Channel, Install, InstallKind, Progress, Project, ProjectStatus, Release};
 
 /// A command's error. `cancelled` tells a cancelled install apart from a failed one.
@@ -187,5 +189,115 @@ impl From<NewProjectForm> for NewProject {
         project.modding = form.modding;
         project.steam_app_id = form.steam_app_id;
         project
+    }
+}
+
+/// The engine versions a project could move to.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpgradeChoicesDto {
+    pub name: String,
+    pub current: Option<String>,
+    pub choices: Vec<UpgradeChoiceDto>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpgradeChoiceDto {
+    pub version: String,
+    pub channel: Channel,
+    /// `pin`, `upgrade`, `downgrade`, or `current` for the version it is on.
+    pub direction: &'static str,
+    pub missing: bool,
+}
+
+impl UpgradeChoiceDto {
+    pub fn new(install: &Install, current: Option<&semver::Version>) -> Self {
+        let direction = match Direction::of(current, &install.version) {
+            Some(Direction::Pin) => "pin",
+            Some(Direction::Upgrade) => "upgrade",
+            Some(Direction::Downgrade) => "downgrade",
+            None => "current",
+        };
+        Self { version: install.version.to_string(), channel: install.channel, direction, missing: install.missing }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReleaseNoteDto {
+    pub version: String,
+    pub notes: String,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum UpgradeEventDto {
+    BackingUp { done: u64, total: u64 },
+    Step { message: String },
+    Change { message: String },
+}
+
+impl From<Event> for UpgradeEventDto {
+    fn from(event: Event) -> Self {
+        match event {
+            Event::BackingUp { done, total } => UpgradeEventDto::BackingUp { done, total },
+            Event::Step(message) => UpgradeEventDto::Step { message },
+            Event::Change(message) => UpgradeEventDto::Change { message },
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupDto {
+    pub archive: String,
+    pub project: String,
+    pub path: String,
+    pub from: Option<String>,
+    pub to: String,
+    pub created: String,
+    pub size: u64,
+    pub files: u64,
+    pub skipped: Vec<String>,
+    pub changes: Vec<String>,
+}
+
+impl From<&Backup> for BackupDto {
+    fn from(backup: &Backup) -> Self {
+        Self {
+            archive: backup.archive.display().to_string(),
+            project: backup.project.clone(),
+            path: backup.path.display().to_string(),
+            from: backup.from.as_ref().map(ToString::to_string),
+            to: backup.to.to_string(),
+            created: backup.created.to_string(),
+            size: backup.size,
+            files: backup.files,
+            skipped: backup.skipped.clone(),
+            changes: backup.changes.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpgradeReportDto {
+    pub from: Option<String>,
+    pub to: String,
+    pub backup: BackupDto,
+    pub changes: Vec<String>,
+    pub migrated: bool,
+}
+
+impl From<&Report> for UpgradeReportDto {
+    fn from(report: &Report) -> Self {
+        Self {
+            from: report.from.as_ref().map(ToString::to_string),
+            to: report.to.to_string(),
+            backup: BackupDto::from(&report.backup),
+            changes: report.changes.clone(),
+            migrated: report.migrated,
+        }
     }
 }

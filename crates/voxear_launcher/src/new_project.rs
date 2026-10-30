@@ -4,7 +4,6 @@
 //! `docs/DESIGN.md`.
 
 use std::ffi::OsString;
-use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::Stdio;
 
@@ -178,40 +177,18 @@ pub fn describe(install: &Install) -> Result<Offer> {
 /// Creates a project with an engine version's `vox new`, passing each step it reports to `on_step`. Returns
 /// the project folder.
 pub fn create(install: &Install, project: &NewProject, on_step: &mut dyn FnMut(&str)) -> Result<PathBuf> {
-    let vox = install.vox();
-    let mut child = engine::command(&install.path, &vox)
-        .args(project.vox_args())
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("couldn't run {}", vox.display()))?;
-
-    // Read stderr on its own thread, so a chatty `vox` can't fill the pipe and stall.
-    let mut stderr = child.stderr.take().expect("stderr is piped");
-    let stderr = std::thread::spawn(move || {
-        let mut text = String::new();
-        _ = stderr.read_to_string(&mut text);
-        text
-    });
-
     let mut done = None;
     let mut failure = None;
-    let stdout = BufReader::new(child.stdout.take().expect("stdout is piped"));
-    for line in stdout.lines() {
-        match serde_json::from_str::<Event>(&line.context("couldn't read `vox new`'s output")?) {
-            Ok(Event::Step { message }) => on_step(&message),
-            Ok(Event::Done { path }) => done = Some(path),
-            Ok(Event::Error { message }) => failure = Some(message),
-            Err(_) => {}
-        }
-    }
-    let status = child.wait().context("couldn't wait for `vox new`")?;
-    let stderr = stderr.join().unwrap_or_default();
+    let mut command = engine::command(&install.path, &install.vox());
+    let finished = engine::run_events(command.args(project.vox_args()), &mut |event| match event {
+        Event::Step { message } => on_step(&message),
+        Event::Done { path } => done = Some(path),
+        Event::Error { message } => failure = Some(message),
+    })?;
     if let Some(message) = failure {
         bail!("{message}");
     }
-    ensure!(status.success(), "`vox new` failed: {}", stderr.trim());
+    ensure!(finished.success, "`vox new` failed: {}", finished.stderr.trim());
     done.ok_or_else(|| anyhow!("`vox new` finished without saying where it created the project"))
 }
 

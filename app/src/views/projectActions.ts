@@ -32,7 +32,7 @@ export async function openProject(project: Project) {
       return
     }
     case 'unpinned':
-      store().toast('info', `${project.name} isn't pinned to an engine version yet. Add engine = "<version>" under [project] in its voxear.toml.`)
+      store().openUpgrade(project)
       return
     case 'missing':
       store().toast('error', `${project.name}'s folder isn't there any more.`, { label: 'Remove from list', run: () => void removeProject(project) })

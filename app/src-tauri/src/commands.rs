@@ -12,7 +12,9 @@ use tauri::State;
 use tauri::ipc::Channel;
 use voxear_launcher::manifest::SIGNATURE_SUFFIX;
 use voxear_launcher::new_project::{self, NewProject, Offer};
-use voxear_launcher::{Layout, Platform, Registry, Removed, Selector, Settings, Store, project, releases};
+use voxear_launcher::{
+    Layout, Platform, Registry, Removed, Selector, Settings, Store, backup, project, releases, upgrade,
+};
 
 use crate::dto::*;
 
@@ -327,4 +329,90 @@ pub async fn save_settings(launcher: Shared<'_>, settings: Settings) -> Reply<()
         settings.save(&launcher.layout)
     })
     .await
+}
+
+/// The installed versions a project could move to, and which way each one is.
+#[tauri::command]
+pub async fn upgrade_choices(launcher: Shared<'_>, path: String) -> Reply<UpgradeChoicesDto> {
+    blocking(&launcher, move |launcher| {
+        let info = project::ProjectInfo::read(&project::project_root(Path::new(&path)))?;
+        let choices = launcher
+            .store()
+            .list()?
+            .iter()
+            .map(|install| UpgradeChoiceDto::new(install, info.engine.as_ref()))
+            .collect();
+        Ok(UpgradeChoicesDto { name: info.name, current: info.engine.map(|v| v.to_string()), choices })
+    })
+    .await
+}
+
+/// Release notes for the versions a project passes through. Empty, rather than an error, when the release list
+/// can't be read: the notes are a nicety.
+#[tauri::command]
+pub async fn release_notes(launcher: Shared<'_>, from: Option<String>, to: String) -> Reply<Vec<ReleaseNoteDto>> {
+    blocking(&launcher, move |launcher| {
+        let from = from.map(|v| Version::parse(&v)).transpose()?;
+        let to = Version::parse(&to)?;
+        let settings = launcher.settings()?;
+        let Some(source) = settings.releases_url() else { return Ok(Vec::new()) };
+        let Ok(loaded) = releases::load(&source, &settings.trusted_keys()?, &launcher.layout) else {
+            return Ok(Vec::new());
+        };
+        let notes = loaded.manifest.between(from.as_ref(), &to).into_iter().filter_map(|release| {
+            release.notes.clone().map(|notes| ReleaseNoteDto { version: release.version.to_string(), notes })
+        });
+        Ok(notes.collect())
+    })
+    .await
+}
+
+/// Moves a project to an installed engine version, backing it up first, and sends each step as it goes.
+#[tauri::command]
+pub async fn upgrade_project(
+    launcher: Shared<'_>,
+    path: String,
+    version: String,
+    allow_downgrade: bool,
+    on_event: Channel<UpgradeEventDto>,
+) -> Reply<UpgradeReportDto> {
+    blocking(&launcher, move |launcher| {
+        let target = launcher
+            .store()
+            .get(&Version::parse(&version)?)?
+            .ok_or_else(|| anyhow!("Voxear {version} isn't installed"))?;
+        let mut on_event = |event| _ = on_event.send(UpgradeEventDto::from(event));
+        let report = upgrade::upgrade(&launcher.layout, Path::new(&path), &target, allow_downgrade, &mut on_event)?;
+        Ok(UpgradeReportDto::from(&report))
+    })
+    .await
+}
+
+/// Backups, newest first: every one, or only those of the project at `path`.
+#[tauri::command]
+pub async fn list_backups(launcher: Shared<'_>, path: Option<String>) -> Reply<Vec<BackupDto>> {
+    blocking(&launcher, move |launcher| {
+        let path = path.map(|path| project::project_root(Path::new(&path)));
+        Ok(backup::list(&launcher.layout, path.as_deref())?.iter().map(BackupDto::from).collect())
+    })
+    .await
+}
+
+/// Restores a backup into a new folder beside its project, adds that to the list, and returns it.
+#[tauri::command]
+pub async fn restore_backup(launcher: Shared<'_>, archive: String) -> Reply<String> {
+    blocking(&launcher, move |launcher| {
+        let backup = backup::find(&launcher.layout, Path::new(&archive))?;
+        let restored = backup::restore(&backup)?;
+        let mut registry = launcher.registry()?;
+        registry.add(&restored)?;
+        registry.save()?;
+        Ok(restored.display().to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn delete_backup(launcher: Shared<'_>, archive: String) -> Reply<()> {
+    blocking(&launcher, move |launcher| backup::delete(&backup::find(&launcher.layout, Path::new(&archive))?)).await
 }

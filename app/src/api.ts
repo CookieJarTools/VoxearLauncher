@@ -107,6 +107,54 @@ export interface Failure {
   cancelled: boolean
 }
 
+/** Which way a project would move: `current` is the version it is on. */
+export type Direction = 'pin' | 'upgrade' | 'downgrade' | 'current'
+
+export interface UpgradeChoice {
+  version: string
+  channel: ReleaseChannel
+  direction: Direction
+  missing: boolean
+}
+
+export interface UpgradeChoices {
+  name: string
+  current: string | null
+  choices: UpgradeChoice[]
+}
+
+export interface ReleaseNote {
+  version: string
+  notes: string
+}
+
+export type UpgradeEvent =
+  | { kind: 'backingUp'; done: number; total: number }
+  | { kind: 'step'; message: string }
+  | { kind: 'change'; message: string }
+
+export interface Backup {
+  archive: string
+  project: string
+  path: string
+  from: string | null
+  to: string
+  created: string
+  size: number
+  files: number
+  skipped: string[]
+  changes: string[]
+}
+
+export interface UpgradeReport {
+  from: string | null
+  to: string
+  backup: Backup
+  changes: string[]
+  /** Whether the engine's own `vox upgrade` ran; when it didn't, only the pin changed. */
+  migrated: boolean
+}
+
 export interface Api {
   appInfo(): Promise<AppInfo>
   listInstalls(): Promise<Install[]>
@@ -128,6 +176,12 @@ export interface Api {
   createProject(version: string, form: NewProjectForm, onStep: (step: string) => void): Promise<string>
   getSettings(): Promise<Settings>
   saveSettings(settings: Settings): Promise<void>
+  upgradeChoices(path: string): Promise<UpgradeChoices>
+  releaseNotes(from: string | null, to: string): Promise<ReleaseNote[]>
+  upgradeProject(path: string, version: string, allowDowngrade: boolean, onEvent: (event: UpgradeEvent) => void): Promise<UpgradeReport>
+  listBackups(path: string | null): Promise<Backup[]>
+  restoreBackup(archive: string): Promise<string>
+  deleteBackup(archive: string): Promise<void>
   pickFolder(title: string, defaultPath?: string): Promise<string | null>
   pickFile(title: string, name: string, extensions: string[]): Promise<string | null>
   reveal(path: string): Promise<void>
@@ -164,6 +218,13 @@ const tauriApi: Api = {
   createProject: (version, form, onStep) => invoke('create_project', { version, form, onStep: channel(onStep) }),
   getSettings: () => invoke('get_settings'),
   saveSettings: (settings) => invoke('save_settings', { settings }),
+  upgradeChoices: (path) => invoke('upgrade_choices', { path }),
+  releaseNotes: (from, to) => invoke('release_notes', { from, to }),
+  upgradeProject: (path, version, allowDowngrade, onEvent) =>
+    invoke('upgrade_project', { path, version, allowDowngrade, onEvent: channel(onEvent) }),
+  listBackups: (path) => invoke('list_backups', { path }),
+  restoreBackup: (archive) => invoke('restore_backup', { archive }),
+  deleteBackup: (archive) => invoke('delete_backup', { archive }),
   pickFolder: async (title, defaultPath) => {
     const picked = await open({ directory: true, title, defaultPath })
     return typeof picked === 'string' ? picked : null

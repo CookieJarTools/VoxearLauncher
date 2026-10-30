@@ -119,6 +119,23 @@ impl ReleaseManifest {
     }
 }
 
+impl ReleaseManifest {
+    /// The releases a project passes through on its way from `from` to `to`, oldest first: the stable releases
+    /// after `from`, up to `to`, and `to` itself. Moving to an older version passes through none.
+    pub fn between(&self, from: Option<&Version>, to: &Version) -> Vec<&Release> {
+        let mut releases: Vec<_> = self
+            .releases
+            .iter()
+            .filter(|release| {
+                let after_from = from.map_or(&release.version == to, |from| &release.version > from);
+                after_from && &release.version <= to && (release.version.pre.is_empty() || &release.version == to)
+            })
+            .collect();
+        releases.sort_by(|a, b| a.version.cmp(&b.version));
+        releases
+    }
+}
+
 impl Release {
     pub fn download(&self, platform: Platform) -> Option<&Download> {
         self.downloads.iter().find(|download| download.platform == platform.as_str())
@@ -285,6 +302,19 @@ signature = "sig"
         let manifest = ReleaseManifest::parse(&text).unwrap();
         assert!(manifest.find(&v("0.3.0")).unwrap().needs_newer_launcher());
         assert!(!sample().find(&v("0.3.0")).unwrap().needs_newer_launcher());
+    }
+
+    #[test]
+    fn lists_the_releases_between_two_versions() {
+        let manifest = sample();
+        let between = |from: Option<&str>, to: &str| {
+            let from = from.map(v);
+            manifest.between(from.as_ref(), &v(to)).iter().map(|r| r.version.to_string()).collect::<Vec<_>>()
+        };
+        assert_eq!(between(Some("0.2.0"), "0.3.1"), ["0.3.0", "0.3.1"]);
+        assert_eq!(between(Some("0.2.0"), "0.4.0-beta.2"), ["0.3.0", "0.3.1", "0.4.0-beta.2"]);
+        assert_eq!(between(None, "0.3.0"), ["0.3.0"]);
+        assert!(between(Some("0.3.0"), "0.2.0").is_empty());
     }
 
     #[test]

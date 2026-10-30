@@ -1,6 +1,6 @@
 //! Fake signed engine releases, for tests and for trying the launcher before real releases exist. Each fake
-//! engine has a `bin/vox` shell script that answers the `vox new` contract, so the new-project flow can be
-//! tried on Linux too. Enabled by the `testing` feature.
+//! engine has a `bin/vox` shell script that answers the `vox new` and `vox upgrade` contracts, so those flows
+//! can be tried on Linux too. Enabled by the `testing` feature.
 
 use std::path::{Path, PathBuf};
 
@@ -8,7 +8,7 @@ use jiff::Timestamp;
 use semver::Version;
 
 use crate::channel::Channel;
-use crate::engine::{ENGINE_FILE, EngineInfo};
+use crate::engine::{ENGINE_FILE, EngineInfo, Supports};
 use crate::manifest::{Download, FORMAT, MANIFEST_FILE, Release, ReleaseManifest, SIGNATURE_SUFFIX};
 use crate::platform::Platform;
 use crate::signing::TrustedKeys;
@@ -101,6 +101,7 @@ pub fn engine_archive(version: &Version, channel: Channel, platform: Platform) -
         channel,
         platform: platform.as_str().to_owned(),
         commit: Some("0000000".to_owned()),
+        supports: Supports { new: Some(1), upgrade: Some(1) },
     };
     let info = toml::to_string(&info).expect("engine info serializes");
     let vox = FAKE_VOX.replace("{version}", &version.to_string());
@@ -206,7 +207,32 @@ const FAKE_VOX: &str = r#"#!/bin/sh
 # A stand-in for `vox` in a fake Voxear release. It answers the launcher's `vox new` contract.
 set -e
 if [ "$1" = "--version" ]; then echo "vox {version}"; exit 0; fi
-if [ "$1" != "new" ]; then echo "this fake vox only knows \`vox new\`" >&2; exit 2; fi
+if [ "$1" = "upgrade" ]; then
+  shift
+  path="$1"; shift
+  from="an unpinned project"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --from) from="Voxear $2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  if [ -e "$path/FAIL_UPGRADE" ]; then
+    echo '{"event":"error","message":"this fake engine was asked to fail"}'
+    exit 1
+  fi
+  echo '{"event":"step","message":"Reading voxear.toml"}'
+  if grep -q '^engine = ' "$path/voxear.toml"; then
+    sed -i 's/^engine = .*/engine = "{version}"/' "$path/voxear.toml"
+  else
+    sed -i 's/^\[project\]$/[project]\nengine = "{version}"/' "$path/voxear.toml"
+  fi
+  echo "{\"event\":\"change\",\"message\":\"Moved from $from to Voxear {version}\"}"
+  echo '{"event":"change","message":"Converted 2 scenes to the new scene format"}'
+  echo '{"event":"done"}'
+  exit 0
+fi
+if [ "$1" != "new" ]; then echo "this fake vox only knows \`vox new\` and \`vox upgrade\`" >&2; exit 2; fi
 shift
 if [ "$1" = "--describe" ]; then
 cat <<'JSON'

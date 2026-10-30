@@ -19,6 +19,7 @@ serde_json.workspace = true
 sha2.workspace = true
 tar.workspace = true
 toml.workspace = true
+toml_edit.workspace = true
 zstd.workspace = true
 
 # Only for the `testing` feature: fake signed releases for tests and local trials.

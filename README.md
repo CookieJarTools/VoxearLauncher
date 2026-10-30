@@ -8,8 +8,8 @@ The engine releases it installs are verified before anything is unpacked: each o
 signature. The design, including every format the launcher and the engine share, is in
 [docs/DESIGN.md](docs/DESIGN.md).
 
-**Status:** the core, the `voxup` command line and the launcher window work. Self-update and project upgrades are
-next. There are no engine releases to install until engine milestone M3, so for now the launcher can be tried
+**Status:** the core, the `voxup` command line and the launcher window work, including moving projects between
+engine versions with a backup first. Self-update is next. There are no engine releases to install until engine milestone M3, so for now the launcher can be tried
 against a fake release folder (below).
 
 ## Requirements
@@ -64,6 +64,10 @@ voxup remove <folder>             take it off the list (its files stay)
 voxup open [folder] [--install]   open with the pinned engine version
 voxup new Orbit -t third-person --git --ide rider
 voxup templates                   what an engine version offers for new projects
+
+voxup upgrade [folder] --to 0.3   move a project to another version, backing it up first
+voxup backups [folder]            project backups, newest first
+voxup restore <archive>           restore a backup into a new folder beside the project
 ```
 
 `VOXUP_HOME` moves the launcher's folder, which is `~/.local/share/voxear` on Linux and `%LOCALAPPDATA%\Voxear`

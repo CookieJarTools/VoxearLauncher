@@ -1,7 +1,7 @@
 // An in-memory stand-in for the Rust core, used when the UI runs in a plain browser. It behaves like the real
 // commands closely enough to preview every screen: installs take a few seconds, and `vox new` reports steps.
 
-import type { Api, Install, NewProjectForm, Offer, Progress, Project, Release, Settings } from './api'
+import type { Api, Backup, Direction, Install, NewProjectForm, Offer, Progress, Project, Release, Settings } from './api'
 
 const home = '/home/you'
 const engines = `${home}/.local/share/voxear/engines`
@@ -57,6 +57,24 @@ let projects: Project[] = [
 ]
 
 let settings: Settings = { releases: 'https://releases.example.invalid/voxear/releases.toml' }
+let backups: Backup[] = [
+  {
+    archive: `${home}/.local/share/voxear/backups/Orbit-1a2b3c4d/20261012T101500Z.tar.zst`,
+    project: 'Orbit',
+    path: `${home}/Games/Orbit`,
+    from: '0.1.0',
+    to: '0.2.0',
+    created: ago(18 * 24 * hour),
+    size: 48_200_000,
+    files: 312,
+    skipped: [],
+    changes: ['Moved from Voxear 0.1.0 to Voxear 0.2.0', 'Converted 4 scenes to the new scene format']
+  }
+]
+
+function compare(a: string, b: string): number {
+  return a.localeCompare(b, undefined, { numeric: true })
+}
 const cancelled = new Set<string>()
 
 function refreshStatuses() {
@@ -174,6 +192,57 @@ export const mockApi: Api = {
     settings = { ...settings, project_location: form.location }
     return path
   },
+  upgradeChoices: async (path) => {
+    const project = projects.find((p) => p.path === path)
+    const current = project?.engine ?? null
+    return {
+      name: project?.name ?? 'Project',
+      current,
+      choices: installs.map((install) => {
+        const order = current ? compare(install.version, current) : 0
+        const direction: Direction = !current ? 'pin' : order === 0 ? 'current' : order > 0 ? 'upgrade' : 'downgrade'
+        return { version: install.version, channel: install.channel, direction, missing: install.missing }
+      })
+    }
+  },
+  releaseNotes: async (from, to) =>
+    releases
+      .filter((r) => r.notes && compare(r.version, to) <= 0 && (!from || compare(r.version, from) > 0) && (!r.version.includes('-') || r.version === to))
+      .sort((a, b) => compare(a.version, b.version))
+      .map((r) => ({ version: r.version, notes: r.notes! })),
+  upgradeProject: async (path, version, allowDowngrade, onEvent) => {
+    const project = projects.find((p) => p.path === path)
+    if (!project) throw { message: 'no such project', cancelled: false }
+    if (project.engine && compare(version, project.engine) < 0 && !allowDowngrade) {
+      throw { message: `Voxear ${version} is older than ${project.engine}, which ${project.name} uses`, cancelled: false }
+    }
+    const total = 64_000_000
+    for (let done = 0; done <= total; done += total / 16) {
+      onEvent({ kind: 'backingUp', done, total })
+      await wait(60)
+    }
+    const changes = [`Moved from ${project.engine ? `Voxear ${project.engine}` : 'an unpinned project'} to Voxear ${version}`, 'Converted 4 scenes to the new scene format']
+    for (const message of ['Reading voxear.toml', 'Converting scenes']) {
+      onEvent({ kind: 'step', message })
+      await wait(450)
+    }
+    for (const message of changes) onEvent({ kind: 'change', message })
+    const backup: Backup = { archive: `${home}/.local/share/voxear/backups/${project.name}-1a2b3c4d/${Date.now()}.tar.zst`, project: project.name, path, from: project.engine, to: version, created: new Date().toISOString(), size: 51_000_000, files: 318, skipped: [], changes }
+    backups = [backup, ...backups]
+    const report = { from: project.engine, to: version, backup, changes, migrated: true }
+    projects = projects.map((p) => (p.path === path ? { ...p, engine: version } : p))
+    refreshStatuses()
+    return report
+  },
+  listBackups: async (path) => backups.filter((b) => !path || b.path === path),
+  restoreBackup: async (archive) => {
+    const backup = backups.find((b) => b.archive === archive)!
+    const restored = `${backup.path} (before ${backup.to})`
+    projects.push({ path: restored, name: backup.project, engine: backup.from, status: { kind: 'ready' }, favourite: false, added: new Date().toISOString(), opened: null })
+    refreshStatuses()
+    return restored
+  },
+  deleteBackup: async (archive) => void (backups = backups.filter((b) => b.archive !== archive)),
   getSettings: async () => ({ ...settings }),
   saveSettings: async (next) => void (settings = { ...next }),
   pickFolder: async (_title, defaultPath) => window.prompt('Folder', defaultPath ?? home),

@@ -51,6 +51,21 @@ impl ProjectInfo {
     }
 }
 
+/// Sets the engine version a project is pinned to, keeping everything else in `voxear.toml` as it was,
+/// comments and all.
+pub fn pin(root: &Path, version: &Version) -> Result<()> {
+    let file = project_file(root);
+    let text = std::fs::read_to_string(&file).with_context(|| format!("couldn't read {}", file.display()))?;
+    let mut document: toml_edit::DocumentMut =
+        text.parse().with_context(|| format!("{} isn't valid", file.display()))?;
+    let project = document
+        .get_mut("project")
+        .and_then(|item| item.as_table_like_mut())
+        .ok_or_else(|| anyhow!("{} has no [project] table", file.display()))?;
+    project.insert("engine", toml_edit::value(version.to_string()));
+    crate::fsutil::write_atomic(&file, document.to_string().as_bytes())
+}
+
 /// Opens a project in an engine version's editor, which finds its own files through `VOXEAR_HOME`.
 pub fn open(install: &Install, project: &Path) -> Result<Child> {
     let editor = install.editor();
@@ -101,6 +116,22 @@ mod tests {
         // The shape of samples/Hello in the engine repository today.
         let (_dir, path) = project("[project]\nname = \"Hello\"\n\n[[objs]]\nname = \"Spinner A\"\n");
         assert_eq!(ProjectInfo::read(&path).unwrap().engine, None);
+    }
+
+    #[test]
+    fn pins_a_version_and_keeps_the_rest_of_the_file() {
+        let text = "# Orbit's settings\n[project]\nname = \"Orbit\" # the name\nscripts = \"S.csproj\"\n\n[[objs]]\nname = \"A\"\n";
+        let (_dir, path) = project(text);
+        pin(&path, &Version::new(0, 3, 0)).unwrap();
+        let after = std::fs::read_to_string(path.join(PROJECT_FILE)).unwrap();
+        assert!(after.starts_with("# Orbit's settings\n[project]\nname = \"Orbit\" # the name\n"), "{after}");
+        assert!(after.contains("[[objs]]\nname = \"A\""), "{after}");
+        assert_eq!(ProjectInfo::read(&path).unwrap().engine, Some(Version::new(0, 3, 0)));
+
+        pin(&path, &Version::new(0, 4, 0)).unwrap();
+        let again = std::fs::read_to_string(path.join(PROJECT_FILE)).unwrap();
+        assert_eq!(again.matches("engine =").count(), 1);
+        assert_eq!(ProjectInfo::read(&path).unwrap().engine, Some(Version::new(0, 4, 0)));
     }
 
     #[test]

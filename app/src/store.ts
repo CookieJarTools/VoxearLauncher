@@ -51,6 +51,10 @@ interface State {
   menu: { x: number; y: number; items: MenuEntry[] } | null
   /** A project to highlight once, such as one just created. */
   highlight: string | null
+  /** The project whose engine version is being changed. */
+  upgrading: Project | null
+  /** The project whose backups are shown. */
+  backupsOf: Project | null
 
   setView(view: View): void
   init(): Promise<void>
@@ -70,6 +74,8 @@ interface State {
   setInstallSheet(open: boolean): void
   setPalette(open: boolean): void
   setHighlight(path: string | null): void
+  openUpgrade(project: Project | null): void
+  openBackups(project: Project | null): void
 }
 
 let nextToast = 1
@@ -129,6 +135,8 @@ export const useStore = create<State>((set, get) => {
     confirmRequest: null,
     menu: null,
     highlight: null,
+    upgrading: null,
+    backupsOf: null,
 
     setView: (view) => set({ view }),
 
@@ -210,7 +218,9 @@ export const useStore = create<State>((set, get) => {
       if (installSheet && !get().releasesLoading) void get().loadReleases()
     },
     setPalette: (palette) => set({ palette }),
-    setHighlight: (highlight) => set({ highlight })
+    setHighlight: (highlight) => set({ highlight }),
+    openUpgrade: (upgrading) => set({ upgrading, palette: false }),
+    openBackups: (backupsOf) => set({ backupsOf, palette: false })
   }
 })
 
