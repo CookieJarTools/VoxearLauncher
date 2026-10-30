@@ -15,6 +15,7 @@ publish = false
 voxear_launcher = { path = "crates/voxear_launcher" }
 
 anyhow = "1"
+base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
 console = "0.16"
 dirs = "7"

@@ -75,11 +75,61 @@ export function Sidebar() {
           <span className="hint">{phaseText(running.progress, false).split(' · ')[0]}</span>
         </button>
       )}
+      <UpdateCard />
       <button className={`nav-item ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')} title="Settings (Ctrl ,)">
         <Icon name="settings" size={16} />
         Settings
       </button>
       <div className="sidebar-foot">Launcher {version ?? ''}</div>
     </nav>
+  )
+}
+
+/** A quiet card when a newer launcher is out: Update, then Restart now. */
+function UpdateCard() {
+  const update = useStore((s) => s.launcherUpdate)
+  const busy = useStore((s) => s.jobs.some((job) => job.state !== 'failed') || s.upgrading !== null)
+  const install = useStore((s) => s.installLauncherUpdate)
+
+  if (update.state === 'downloading') {
+    const progress = update.total ? { phase: 'downloading' as const, done: update.done, total: update.total } : null
+    return (
+      <div className="job-mini update-card">
+        <div className="job-mini-title">
+          <span>Updating to {update.version}</span>
+        </div>
+        <ProgressBar progress={progress} />
+      </div>
+    )
+  }
+  if (update.state === 'ready') {
+    return (
+      <div className="job-mini update-card">
+        <div className="job-mini-title">
+          <span>Launcher {update.version} is ready</span>
+        </div>
+        <button
+          className="btn btn-sm btn-primary"
+          disabled={busy}
+          title={busy ? 'Waits for installs and upgrades to finish' : undefined}
+          onClick={() => void api.restartLauncher()}
+        >
+          Restart now
+        </button>
+      </div>
+    )
+  }
+  if (update.state !== 'idle' || update.status?.kind !== 'available') return null
+  return (
+    <div className="job-mini update-card">
+      <div className="job-mini-title">
+        <span>Launcher {update.status.version} is out</span>
+      </div>
+      {update.status.notes && <span className="hint update-notes">{update.status.notes}</span>}
+      <button className="btn btn-sm" onClick={() => void install()}>
+        <Icon name="download" size={14} />
+        Update
+      </button>
+    </div>
   )
 }

@@ -9,9 +9,9 @@ use crate::fsutil;
 use crate::layout::Layout;
 use crate::signing::TrustedKeys;
 
-/// Where official engine releases are listed. Unset until release hosting is decided (see the open questions
-/// in `docs/DESIGN.md`); until then, set `releases` in the settings or `VOXUP_RELEASES`.
-pub const DEFAULT_RELEASES: Option<&str> = None;
+/// Where official engine releases are listed: GitHub Pages for the public `CookieJarTools/VoxearReleases`
+/// repository. The archives themselves are that repository's release assets.
+pub const DEFAULT_RELEASES: Option<&str> = Some("https://cookiejartools.github.io/VoxearReleases/engine/releases.toml");
 /// Overrides where engine releases are listed, for mirrors and testing.
 pub const RELEASES_VAR: &str = "VOXUP_RELEASES";
 
@@ -26,6 +26,9 @@ pub struct Settings {
     /// The folder new projects go in, remembered from the last one created.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_location: Option<String>,
+    /// Which launcher updates to take. Stable unless set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launcher_channel: Option<crate::self_update::UpdateChannel>,
 }
 
 impl Settings {

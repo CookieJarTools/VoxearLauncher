@@ -159,6 +159,22 @@ kbd {
   animation: rise var(--t-slow) var(--ease-out);
 }
 
+.update-card .btn {
+  justify-self: start;
+}
+
+.update-card .job-mini-title span:last-child {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.update-notes {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .job-mini-title {
   display: flex;
   justify-content: space-between;

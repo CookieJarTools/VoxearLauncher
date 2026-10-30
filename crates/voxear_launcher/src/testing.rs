@@ -29,8 +29,18 @@ impl TestKey {
         self.pair.pk.to_base64()
     }
 
+    /// The whole `.pub` file, as minisign writes it.
+    pub fn public_file(&self) -> String {
+        self.pair.pk.to_box().expect("test keys serialize").to_string()
+    }
+
     pub fn sign(&self, data: &[u8]) -> String {
-        minisign::sign(Some(&self.pair.pk), &self.pair.sk, data, Some("voxear test release"), None)
+        self.sign_with_comment(data, "voxear test release")
+    }
+
+    /// Signs with a trusted comment of your own, such as the `version:` field launcher updates carry.
+    pub fn sign_with_comment(&self, data: &[u8], trusted_comment: &str) -> String {
+        minisign::sign(Some(&self.pair.pk), &self.pair.sk, data, Some(trusted_comment), None)
             .expect("signing in memory can't fail")
             .into_string()
     }

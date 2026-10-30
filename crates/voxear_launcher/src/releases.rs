@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use sha2::{Digest, Sha256};
 
 use crate::fetch;
@@ -38,8 +38,9 @@ pub fn load(url: &str, keys: &TrustedKeys, layout: &Layout) -> Result<Releases> 
 /// Fetches and verifies the manifest at `url`, without falling back to a saved copy.
 pub fn fetch_verified(url: &str, keys: &TrustedKeys, layout: &Layout) -> Result<ReleaseManifest> {
     let text = fetch::read(url, MAX_MANIFEST)?;
+    // A missing signature is a broken release, not an unpublished one, so it loses its NotFound.
     let signature = fetch::read(&format!("{url}{SIGNATURE_SUFFIX}"), MAX_SIGNATURE)
-        .context("couldn't fetch the release manifest's signature")?;
+        .map_err(|e| anyhow!("couldn't fetch the release manifest's signature: {e:#}"))?;
     let signature = String::from_utf8(signature).context("the release manifest's signature isn't text")?;
     keys.verify(&text, &signature).context("the release manifest failed its signature check")?;
     let manifest = ReleaseManifest::parse(std::str::from_utf8(&text).context("the release manifest isn't text")?)?;
@@ -143,6 +144,26 @@ mod tests {
         let releases = load(&url, &fake.trusted_keys(), &layout).unwrap();
         assert!(releases.stale.is_some(), "the newer saved copy is used instead");
         assert!(releases.manifest.find(&semver::Version::new(0, 4, 0)).is_some());
+    }
+
+    #[test]
+    fn says_when_nothing_is_published_yet() {
+        let dir = tempfile::tempdir().unwrap();
+        let layout = Layout::new(dir.path().join("home"));
+        let url = dir.path().join("empty").join("releases.toml").to_string_lossy().into_owned();
+        let error = load(&url, &TrustedKeys::new(), &layout).err().unwrap();
+        assert!(fetch::is_not_found(&error), "{error:#}");
+    }
+
+    #[test]
+    fn treats_a_missing_signature_as_broken() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut fake = FakeReleases::new(dir.path().join("mirror"));
+        fake.add("0.3.0", Channel::Stable);
+        let url = fake.write();
+        std::fs::remove_file(format!("{url}{SIGNATURE_SUFFIX}")).unwrap();
+        let error = fetch_verified(&url, &fake.trusted_keys(), &Layout::new(dir.path().join("home"))).unwrap_err();
+        assert!(!fetch::is_not_found(&error), "{error:#}");
     }
 
     #[test]

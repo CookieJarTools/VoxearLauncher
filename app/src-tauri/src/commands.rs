@@ -8,12 +8,14 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow};
 use semver::Version;
-use tauri::State;
 use tauri::ipc::Channel;
+use tauri::{AppHandle, Runtime, State};
+use tauri_plugin_updater::UpdaterExt;
 use voxear_launcher::manifest::SIGNATURE_SUFFIX;
 use voxear_launcher::new_project::{self, NewProject, Offer};
 use voxear_launcher::{
-    Layout, Platform, Registry, Removed, Selector, Settings, Store, backup, project, releases, upgrade,
+    Layout, Platform, Registry, Removed, Selector, Settings, Store, backup, fetch, launcher_version, project, releases,
+    self_update, upgrade,
 };
 
 use crate::dto::*;
@@ -103,9 +105,15 @@ pub async fn list_releases(launcher: Shared<'_>) -> Reply<ReleasesDto> {
     blocking(&launcher, |launcher| {
         let settings = launcher.settings()?;
         let Some(source) = settings.releases_url() else {
-            return Ok(ReleasesDto { source: None, releases: Vec::new(), stale: None });
+            return Ok(ReleasesDto { source: None, releases: Vec::new(), stale: None, unpublished: false });
         };
-        let loaded = releases::load(&source, &settings.trusted_keys()?, &launcher.layout)?;
+        let loaded = match releases::load(&source, &settings.trusted_keys()?, &launcher.layout) {
+            Ok(loaded) => loaded,
+            Err(error) if fetch::is_not_found(&error) => {
+                return Ok(ReleasesDto { source: Some(source), releases: Vec::new(), stale: None, unpublished: true });
+            }
+            Err(error) => return Err(error),
+        };
         let installs = launcher.store().list()?;
         let releases = loaded
             .manifest
@@ -117,7 +125,7 @@ pub async fn list_releases(launcher: Shared<'_>) -> Reply<ReleasesDto> {
                 ReleaseDto::new(release, size, installed)
             })
             .collect();
-        Ok(ReleasesDto { source: Some(source), releases, stale: loaded.stale })
+        Ok(ReleasesDto { source: Some(source), releases, stale: loaded.stale, unpublished: false })
     })
     .await
 }
@@ -415,4 +423,96 @@ pub async fn restore_backup(launcher: Shared<'_>, archive: String) -> Reply<Stri
 #[tauri::command]
 pub async fn delete_backup(launcher: Shared<'_>, archive: String) -> Reply<()> {
     blocking(&launcher, move |launcher| backup::delete(&backup::find(&launcher.layout, Path::new(&archive))?)).await
+}
+
+/// A launcher update that was found and not installed yet.
+#[derive(Default)]
+pub struct PendingUpdate(Mutex<Option<tauri_plugin_updater::Update>>);
+
+/// Why this copy of the launcher can't update itself, if it can't.
+fn why_no_self_update() -> Option<String> {
+    if self_update::update_key().is_none() {
+        return Some("This build has no launcher update key, so it can't check for updates.".to_owned());
+    }
+    if cfg!(debug_assertions) {
+        return Some("Development builds don't update themselves.".to_owned());
+    }
+    if cfg!(target_os = "linux") && std::env::var_os("APPIMAGE").is_none() {
+        return Some(
+            "Only the AppImage updates itself. This copy was installed some other way, so update it that way."
+                .to_owned(),
+        );
+    }
+    None
+}
+
+/// Checks the launcher's channel for a newer version. Tauri's updater fetches and checks the update itself; the
+/// launcher looks first, so "nothing published yet" isn't reported as a failure.
+#[tauri::command]
+pub async fn check_launcher_update<R: Runtime>(
+    app: AppHandle<R>,
+    launcher: Shared<'_>,
+    pending: State<'_, PendingUpdate>,
+) -> Reply<UpdateStatusDto> {
+    if let Some(reason) = why_no_self_update() {
+        return Ok(UpdateStatusDto::NotSetUp { reason });
+    }
+    let url = blocking(&launcher, |launcher| {
+        Ok(self_update::manifest_url(launcher.settings()?.launcher_channel.unwrap_or_default()))
+    })
+    .await?;
+    let lookup = url.clone();
+    let Some(manifest) = blocking(&launcher, move |_| self_update::fetch_manifest(&lookup)).await? else {
+        return Ok(UpdateStatusDto::NothingPublished);
+    };
+    let current = launcher_version();
+    if manifest.version <= current {
+        return Ok(UpdateStatusDto::UpToDate { version: current.to_string() });
+    }
+
+    let fail = |error: tauri_plugin_updater::Error| Failure {
+        message: format!("couldn't check for updates: {error}"),
+        cancelled: false,
+    };
+    let endpoint = url.parse().map_err(|e| Failure { message: format!("{url} isn't a URL: {e}"), cancelled: false })?;
+    let updater = app.updater_builder().endpoints(vec![endpoint]).map_err(fail)?.build().map_err(fail)?;
+    let Some(update) = updater.check().await.map_err(fail)? else {
+        return Ok(UpdateStatusDto::UpToDate { version: current.to_string() });
+    };
+    let status = UpdateStatusDto::Available {
+        version: update.version.clone(),
+        notes: update.body.clone(),
+        date: update.date.map(|date| date.to_string()),
+    };
+    *pending.0.lock().expect("the lock is never poisoned") = Some(update);
+    Ok(status)
+}
+
+/// Downloads the update found by the last check, verifies it, and installs it. On Windows the installer takes over
+/// from here; elsewhere the new version starts on the next restart.
+#[tauri::command]
+pub async fn install_launcher_update(
+    pending: State<'_, PendingUpdate>,
+    on_progress: Channel<DownloadDto>,
+) -> Reply<()> {
+    let update = pending.0.lock().expect("the lock is never poisoned").take().ok_or_else(|| Failure {
+        message: "there's no update to install; check for updates first".to_owned(),
+        cancelled: false,
+    })?;
+    let mut done = 0u64;
+    update
+        .download_and_install(
+            |chunk, total| {
+                done += chunk as u64;
+                _ = on_progress.send(DownloadDto { done, total });
+            },
+            || {},
+        )
+        .await
+        .map_err(|error| Failure { message: format!("couldn't install the update: {error}"), cancelled: false })
+}
+
+#[tauri::command]
+pub fn restart_launcher<R: Runtime>(app: AppHandle<R>) {
+    app.restart()
 }

@@ -21,13 +21,25 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(updater())
         .run(tauri::generate_context!())
         .expect("the Voxear Launcher window failed to start");
 }
 
+/// Tauri's updater, with the launcher update key built into the core rather than into `tauri.conf.json`, so the
+/// key lives beside the engine release keys and a build without one still starts.
+fn updater<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R, tauri_plugin_updater::Config> {
+    let builder = tauri_plugin_updater::Builder::new();
+    match voxear_launcher::self_update::update_key() {
+        Some(key) => builder.pubkey(key).build(),
+        None => builder.build(),
+    }
+}
+
 /// The launcher's state and commands, on any runtime; the tests use Tauri's mock one.
 fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, launcher: commands::Launcher) -> tauri::Builder<R> {
-    builder.manage(Arc::new(launcher)).invoke_handler(tauri::generate_handler![
+    let builder = builder.manage(Arc::new(launcher)).manage(commands::PendingUpdate::default());
+    builder.invoke_handler(tauri::generate_handler![
         commands::app_info,
         commands::list_installs,
         commands::list_releases,
@@ -54,6 +66,9 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, launcher: comman
         commands::list_backups,
         commands::restore_backup,
         commands::delete_backup,
+        commands::check_launcher_update,
+        commands::install_launcher_update,
+        commands::restart_launcher,
     ])
 }
 

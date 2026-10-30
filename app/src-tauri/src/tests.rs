@@ -81,10 +81,13 @@ fn describes_the_app() {
 }
 
 #[test]
-fn lists_nothing_until_a_release_source_is_set() {
+fn says_when_nothing_is_published_yet() {
     let fixture = Fixture::new();
+    let nowhere = fixture.dir.path().join("unpublished").join("releases.toml").display().to_string();
+    fixture.ok("save_settings", json!({ "settings": { "releases": nowhere } }));
     let releases = fixture.ok("list_releases", json!({}));
-    assert_eq!(releases["source"], Value::Null);
+    assert_eq!(releases["unpublished"], true);
+    assert_eq!(releases["releases"], json!([]));
     assert_eq!(fixture.ok("list_installs", json!({})), json!([]));
 }
 
@@ -228,4 +231,14 @@ fn upgrades_a_project_and_restores_its_backup() {
         json!([]),
         "the fakes have no notes"
     );
+}
+
+#[test]
+fn says_why_a_development_build_cannot_update_itself() {
+    let fixture = Fixture::new();
+    let status = fixture.ok("check_launcher_update", json!({}));
+    assert_eq!(status["kind"], "notSetUp");
+    assert!(status["reason"].as_str().unwrap().len() > 10);
+    let error = fixture.call("install_launcher_update", json!({ "onProgress": channel(4) })).unwrap_err();
+    assert!(error["message"].as_str().unwrap().contains("check for updates first"), "{error}");
 }

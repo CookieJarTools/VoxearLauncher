@@ -1,13 +1,14 @@
 //! Reads manifests and downloads from `https://` URLs or from local files (`file://` URLs and plain paths), so
 //! a release mirror, an offline folder and the tests all go through the same code.
 
+use std::fmt;
 use std::fs::File;
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 
 pub const USER_AGENT: &str = concat!("voxup/", env!("CARGO_PKG_VERSION"));
 
@@ -17,16 +18,42 @@ pub struct Fetched {
     pub len: Option<u64>,
 }
 
+/// The source doesn't exist: a 404, or a missing file. Callers use it to tell "nothing has been published
+/// there yet" apart from a failure.
+#[derive(Debug)]
+pub struct NotFound(pub String);
+
+impl fmt::Display for NotFound {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "there's nothing at {}", self.0)
+    }
+}
+
+impl std::error::Error for NotFound {}
+
+/// Whether `error` comes from a source that doesn't exist.
+pub fn is_not_found(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| cause.is::<NotFound>())
+}
+
 /// Opens `source` for reading.
 pub fn open(source: &str) -> Result<Fetched> {
     match Source::parse(source)? {
         Source::File(path) => {
-            let file = File::open(&path).with_context(|| format!("couldn't open {}", path.display()))?;
+            let file = match File::open(&path) {
+                Ok(file) => file,
+                Err(e) if e.kind() == ErrorKind::NotFound => return Err(NotFound(path.display().to_string()).into()),
+                Err(e) => return Err(e).with_context(|| format!("couldn't open {}", path.display())),
+            };
             let len = file.metadata().ok().map(|meta| meta.len());
             Ok(Fetched { reader: Box::new(file), len })
         }
         Source::Https(url) => {
-            let response = agent().get(&url).call().map_err(|e| anyhow!("couldn't download {url}: {e}"))?;
+            let response = match agent().get(&url).call() {
+                Ok(response) => response,
+                Err(ureq::Error::StatusCode(404)) => return Err(NotFound(url).into()),
+                Err(e) => bail!("couldn't download {url}: {e}"),
+            };
             let len = response.body().content_length();
             Ok(Fetched { reader: Box::new(response.into_body().into_reader()), len })
         }
@@ -115,6 +142,14 @@ mod tests {
     fn refuses_plain_http() {
         let error = open("http://example.invalid/releases.toml").err().unwrap();
         assert!(error.to_string().contains("only https://"), "{error}");
+    }
+
+    #[test]
+    fn says_when_a_source_does_not_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = read(&dir.path().join("nothing.toml").to_string_lossy(), 10).err().unwrap();
+        assert!(is_not_found(&error), "{error}");
+        assert!(!is_not_found(&anyhow::anyhow!("something else")));
     }
 
     #[test]

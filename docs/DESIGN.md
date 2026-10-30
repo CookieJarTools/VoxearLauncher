@@ -22,6 +22,8 @@ Settled on 2026-10-30:
 - **Command line:** `voxup`. It is short, like `rustup`, which also installs toolchains side by side with
   stable, beta and nightly channels.
 - **Licence:** PolyForm Shield 1.0.0, the same as the engine.
+- **Hosting:** a public `CookieJarTools/VoxearReleases` repository. Archives and launcher builds are its release
+  assets, and the manifests are on its GitHub Pages site (see "Publishing releases").
 - **Platforms:** Linux (Wayland and X11) and Windows 10/11, on x86-64.
 
 ## Principles
@@ -159,16 +161,28 @@ Everything is signed with **minisign** keys: Ed25519 over a BLAKE2b pre-hash. Th
 - The launcher's own updates use a **separate key**, so a leaked engine key can't push a launcher update, and
   the reverse.
 
-**Signing keys (to do).** Neither key exists yet, and until the engine key does, only keys in the settings are
-trusted. The secret keys belong offline or in CI secrets, never in a repository.
+**Signing keys (to do).** Neither key exists yet.
+- Until the engine key does, only keys in the settings are trusted.
+- Until the launcher key does, the launcher can't update itself.
+
+The secret keys belong offline or in CI secrets, never in a repository. `voxear-release` makes both (it asks for
+a password to encrypt each one):
 
 ```bash
-minisign -G -p voxear-engine.pub -s voxear-engine.key
+cargo run -p voxear_release -- keygen ~/.voxear-keys/engine
 ```
 
 ```bash
-npm run tauri signer generate -- -w ~/.tauri/voxear-launcher.key
+cargo run -p voxear_release -- keygen ~/.voxear-keys/launcher --tauri
 ```
+
+Each prints its public key:
+- the engine key's goes in `ENGINE_RELEASE_KEYS` in `crates/voxear_launcher/src/signing.rs`
+- the launcher key's, in Tauri's base64 form, goes in `LAUNCHER_UPDATE_KEY` in
+  `crates/voxear_launcher/src/self_update.rs`
+
+The launcher key is also what `tauri build` signs with, through `TAURI_SIGNING_PRIVATE_KEY`. `minisign -G` and
+`tauri signer generate` make compatible keys, if you'd rather use those.
 
 ## Engine archives and `engine.toml`
 
@@ -462,14 +476,14 @@ The launcher adds the new project to the list, shows each step as it arrives, an
 The launcher updates itself from **its own manifest, signed with its own key**, separately from engine versions.
 
 **Packaging.**
-- Linux: an AppImage, the only Linux format Tauri's updater can replace in place. If the launcher was installed
-  by a package manager (such as an AUR package), self-update is switched off at build time, and the window says
-  that updates come from the package manager.
+- Linux: an AppImage, the only Linux format Tauri's updater can replace in place. A copy installed any other way
+  (a `.deb`, or later an AUR package) says that it should be updated the way it was installed.
 - Windows: a per-user NSIS installer, so no admin rights are needed. The updater runs the new installer in passive
   mode after the launcher closes.
 
-**Manifest.** Tauri's updater reads a static JSON file per channel: `launcher/stable.json` and
-`launcher/beta.json`.
+**Manifest.** One static JSON file per channel, in the format Tauri's updater reads:
+`https://cookiejartools.github.io/VoxearReleases/launcher/stable.json`, and `beta.json`. `VOXUP_LAUNCHER_UPDATES`
+points the launcher at another folder or URL.
 
 ```json
 {
@@ -478,25 +492,99 @@ The launcher updates itself from **its own manifest, signed with its own key**, 
   "pub_date": "2026-11-15T12:00:00Z",
   "platforms": {
     "linux-x86_64": { "url": "https://…/VoxearLauncher_0.2.0_amd64.AppImage", "signature": "<base64 of the .sig>" },
-    "windows-x86_64": { "url": "https://…/VoxearLauncher_0.2.0_x64-setup.exe", "signature": "…" }
+    "windows-x86_64": { "url": "https://…/VoxearLauncher_0.2.0_x64-setup.exe", "signature": "…" },
+    "voxup-linux-x86_64": { "url": "https://…/voxup", "signature": "…" }
   }
 }
 ```
 
-The updater only moves to a higher version, which rules out rollback. The public key is compiled in through
-`tauri.conf.json`.
+- The `voxup-<platform>` entries are standalone `voxup` builds. Tauri's updater ignores them.
+- Signatures are minisign signatures, base64-encoded as Tauri writes them.
+- **The signed version must match.** The manifest itself isn't signed, so each signature's trusted comment carries
+  `version:<version>` and must equal the version the manifest announces. Otherwise an old build could be offered
+  as a new one. The window turns on Tauri's `requireSignedVersion` for this, and `voxup` checks the same way.
+- An update must be newer than the running version.
 
-**Flow.**
-- The launcher checks when it opens and every six hours while it is open. A quiet card in the sidebar says when
-  an update is ready, the way The Jar does it.
-- **Update** downloads and verifies the update in the background, then **Restart now** applies it.
-- Engine installs in progress block the restart until they finish.
+**The key.**
+- The launcher update key is built into `voxear_launcher::self_update::LAUNCHER_UPDATE_KEY`, beside the engine
+  release keys, and handed to Tauri's updater when the app starts.
+- `tauri.conf.json` holds no key, so a build without one still starts; it just can't update itself.
+- A build can take a key through `VOXEAR_LAUNCHER_UPDATE_KEY` when it's compiled, for trying the update flow
+  with a key of your own.
 
-**The command line.** `voxup` is built into the launcher binary: called with a subcommand, it runs without
-opening a window. Settings › "Command line" puts a `voxup` shim on the PATH: `~/.local/bin/voxup` on Linux, and
-`%LOCALAPPDATA%\Voxear\bin\voxup.cmd` on Windows, added to the user's PATH. The shim calls the launcher, so
-launcher updates update `voxup` too. A standalone `voxup` binary is also published, for CI and headless machines.
-`voxup self update` (planned) updates a standalone `voxup` from the same manifest, using the same signature check.
+**The window.**
+- It checks when it opens and every six hours while it's open, quietly. The launcher reads the manifest itself
+  first, so "nothing published yet" and "up to date" aren't reported as failures; Tauri's updater then fetches and
+  checks the update.
+- When there's a newer version, a card in the sidebar shows it with its notes and **Update**. That downloads,
+  verifies and installs the update with progress, and then the card offers **Restart now**. Restart waits while
+  an engine install or a project upgrade is running.
+- Settings › Launcher updates has the channel (Stable or Beta, saved at once), **Check now**, and what the last
+  check found. Development builds, and copies that weren't installed from the AppImage or the installer, say why
+  they don't update themselves.
+
+**The command line.**
+- `voxup self update` updates a standalone `voxup` from its `voxup-<platform>` entry. It downloads beside itself,
+  checks the signature and the signed version, and swaps itself in one rename. On Windows the running program is
+  renamed aside first and removed the next time `voxup` runs.
+- `--check` only says whether there's an update.
+- A copy in a folder it can't write to, such as one installed by a package manager, says to update it there
+  instead.
+
+**Planned.** Settings › "Command line" will put a `voxup` shim on the PATH that calls the launcher's own copy, so
+launcher updates update it too: `~/.local/bin/voxup` on Linux, and `%LOCALAPPDATA%\Voxear\bin\voxup.cmd` on
+Windows.
+
+## Publishing releases
+
+Releases are published to the public `CookieJarTools/VoxearReleases` repository:
+- **Release assets** hold the archives and builds, under tags such as `engine-v0.3.0` and `launcher-v0.2.0`:
+  `https://github.com/CookieJarTools/VoxearReleases/releases/download/<tag>/<file>`.
+- **GitHub Pages** serves the manifests from the repository's `gh-pages` branch, at
+  `https://cookiejartools.github.io/VoxearReleases/`. "Publish the site" below means committing the site folder's
+  contents to that branch:
+
+```
+engine/releases.toml            the engine release manifest
+engine/releases.toml.minisig    its signature
+launcher/stable.json            launcher updates, per channel
+launcher/beta.json
+```
+
+`voxear-release` (in `crates/voxear_release`) writes all of it. Key passwords come from
+`VOXEAR_SIGNING_PASSWORD`, or it asks for them.
+
+**An engine release.** Each archive's own `engine.toml` gives the version, channel and platform. The command signs
+each archive (writing its `.minisig` beside it), lists it in the manifest with a newer `generated` time, and
+signs the manifest:
+
+```bash
+voxear-release engine add voxear-0.3.0-*.tar.zst --site site --key ~/.voxear-keys/engine.key --notes https://…
+```
+
+Then upload the archives and their `.minisig` files to the `engine-v0.3.0` release, and publish the site.
+`engine yank <version>` pulls a release (`--undo` puts it back), and `engine prune --keep 30` drops old
+nightlies.
+
+**A launcher release.** Bundle the window with signing on:
+
+```bash
+TAURI_SIGNING_PRIVATE_KEY=… npm run tauri build -- --config src-tauri/tauri.release.conf.json
+```
+
+That writes each bundle's `.sig`. List each bundle, and the standalone `voxup` builds, in a channel:
+
+```bash
+voxear-release launcher add Voxear.Launcher_0.2.0_amd64.AppImage --site site --channel stable --version 0.2.0 --target linux-x86_64 --sig Voxear.Launcher_0.2.0_amd64.AppImage.sig
+```
+
+```bash
+voxear-release launcher add voxup --site site --channel stable --version 0.2.0 --target voxup-linux-x86_64 --key ~/.voxear-keys/launcher.key
+```
+
+Then upload the bundles, the `voxup` builds and their signatures to the `launcher-v0.2.0` release, and publish
+the site. A new version starts a fresh channel manifest, and a version older than the one already published is
+refused.
 
 ## The launcher window
 
@@ -565,7 +653,6 @@ testing the core never needs Node.
   names, camelCase arguments and channel format, against a fake signed release.
 
 **Still to come in the window:**
-- self-update and its sidebar card
 - the command-line shim setting
 - template thumbnails from the engine
 
@@ -577,12 +664,18 @@ testing the core never needs Node.
 releases = "https://…/releases.toml"   # where engine releases are listed
 trusted_keys = ["RWQ…"]                 # extra keys for self-hosted engine builds
 project_location = "/home/jeo/VoxearProjects"   # remembered from the last new project
+launcher_channel = "beta"               # launcher updates: stable (the default) or beta
 ```
+
+With nothing set, engine releases come from `https://cookiejartools.github.io/VoxearReleases/engine/releases.toml`.
+Until something is published there, the launcher says no releases are published yet, rather than reporting an
+error.
 
 | Variable | Effect |
 |---|---|
 | `VOXUP_HOME` | Moves the whole launcher folder (portable setups, tests). |
 | `VOXUP_RELEASES` | Overrides where engine releases are listed. `--releases` does the same for one command. |
+| `VOXUP_LAUNCHER_UPDATES` | Overrides where the launcher's update manifests are read from. |
 | `VOXEAR_HOME` | Set by the launcher for every engine process it starts. |
 
 Release sources are `https://` URLs or local paths (`file://` URLs or plain paths). Plain HTTP is refused.
@@ -606,12 +699,9 @@ These are the engine-side parts of the contract. The launcher stubs them in its 
    on failure, as defined above. Use the template, setup and IDE IDs listed above.
 6. **Version numbers**: semver, with no tag for stable, `-beta.N` or `-rc.N` for beta, and
    `-nightly.YYYYMMDD` for nightly.
-7. **A release pipeline.**
-   - Build an archive for each platform.
-   - Sign each archive with the engine key: `minisign -S -s voxear-engine.key -m <archive>`.
-   - Add a `[[release]]` entry to `releases.toml`, with a newer `generated` time.
-   - Sign the manifest.
-   - Publish the manifest, the archives and every `.minisig` together.
+7. **A release pipeline.** Build an archive for each platform, then run `voxear-release engine add` on them (see
+   "Publishing releases"). That signs each archive, lists it, and signs the manifest. Upload the archives and
+   their `.minisig` files as release assets, and publish the site.
 8. **`vox upgrade`**, as defined under "Changing a project's engine version": it converts the project, rewrites
    `engine`, and reports each change as NDJSON. Until an engine has it, the launcher changes only the pin.
 9. **Later:** `voxear-editor --project <folder>` (M3).
@@ -620,18 +710,12 @@ These are the engine-side parts of the contract. The launcher stubs them in its 
 
 ## Open questions
 
-1. **Where releases are hosted.** The engine repository is private, and assets on a private repository's GitHub
-   releases need a token to download. Options:
-   - a public `CookieJarTools/VoxearReleases` repository, with the archives as release assets and the manifest
-     on GitHub Pages;
-   - a static bucket behind a CDN.
-
-   Signing makes the host irrelevant to trust. Until this is decided, `settings::DEFAULT_RELEASES` is unset and a
-   source must be configured.
-2. **Who holds the signing keys,** and where: offline, or as CI secrets.
-3. **Windows code signing** for the launcher installer, so SmartScreen doesn't warn.
-4. **Backups:** whether to delete old ones on their own after a while. For now they are kept until deleted.
-5. **The Jar:** whether the launcher should also appear in The Jar's catalogue.
+1. **Who holds the signing keys,** and where: offline, or as CI secrets.
+2. **Windows code signing** for the launcher installer, so SmartScreen doesn't warn.
+3. **Backups:** whether to delete old ones on their own after a while. For now they are kept until deleted.
+4. **The Jar:** whether the launcher should also appear in The Jar's catalogue.
+5. **Release automation:** a GitHub Actions workflow that builds both platforms and runs `voxear-release`. Until
+   then, releases are published by hand as described above.
 
 ## Status
 
@@ -645,5 +729,6 @@ These are the engine-side parts of the contract. The launcher stubs them in its 
 | `voxup` command line | Done |
 | Opening projects | Done; waits for the editor (M3) |
 | Launcher window (Tauri): projects, installs, new project, settings, palette | Done; commands tested through IPC |
-| Self-update | Planned |
+| Launcher self-update: window (Tauri's updater) and `voxup self update` | Done; `voxup` tested end to end, the window's install step waits for a real signed build |
+| Release tool (`voxear-release`): keys, engine and launcher manifests | Done, tested against the launcher's own install and update code |
 | Changing engine versions, with backups and restore | Done, tested; the conversion itself waits for `vox upgrade` |

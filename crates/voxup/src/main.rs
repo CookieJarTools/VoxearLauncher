@@ -3,6 +3,7 @@
 
 mod engines;
 mod projects;
+mod selfupdate;
 mod ui;
 mod upgrades;
 
@@ -11,6 +12,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
+use voxear_launcher::fetch;
 use voxear_launcher::releases::{self, Releases};
 use voxear_launcher::{Layout, Platform, Registry, Settings, Store, TrustedKeys};
 
@@ -77,6 +79,9 @@ enum Command {
         /// The backup's archive, as `voxup backups` shows it.
         backup: PathBuf,
     },
+    /// The launcher's own updates.
+    #[command(name = "self", subcommand)]
+    SelfCommand(selfupdate::SelfCommand),
     /// Show the templates, setup and IDEs an engine version offers for new projects.
     Templates {
         /// The engine version to ask (default: the newest stable one installed).
@@ -86,6 +91,9 @@ enum Command {
 }
 
 fn main() -> ExitCode {
+    if let Ok(exe) = std::env::current_exe() {
+        voxear_launcher::self_update::clean_up_after_update(&exe);
+    }
     let cli = Cli::parse();
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
@@ -111,6 +119,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Upgrade(args) => upgrades::upgrade(&launcher, args),
         Command::Backups { folder } => upgrades::backups(&launcher, folder.as_deref()),
         Command::Restore { backup } => upgrades::restore(&launcher, &backup),
+        Command::SelfCommand(command) => selfupdate::run(&launcher, command),
         Command::Templates { engine } => projects::templates(&launcher, engine.as_deref()),
     }
 }
@@ -148,7 +157,9 @@ impl Launcher {
                 ui::pretty(&self.layout.settings_file())
             )
         })?;
-        let releases = releases::load(&url, &self.keys()?, &self.layout)?;
+        let releases = releases::load(&url, &self.keys()?, &self.layout).map_err(|error| {
+            if fetch::is_not_found(&error) { error.context("no engine releases are published yet") } else { error }
+        })?;
         if let Some(reason) = &releases.stale {
             ui::warn(&format!("couldn't check for new releases, so this is the list from last time: {reason}"));
         }

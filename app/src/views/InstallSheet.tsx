@@ -44,6 +44,7 @@ export function InstallSheet() {
   if (!open) return null
   const shown = (releases?.releases ?? []).filter((release) => release.channel === channel)
   const noSource = releases !== null && releases.source === null
+  const unpublished = releases?.unpublished === true
 
   return (
     <div className="overlay" onMouseDown={() => setOpen(false)}>
@@ -57,7 +58,7 @@ export function InstallSheet() {
             <Icon name="close" size={15} />
           </button>
         </div>
-        {!noSource && (
+        {!noSource && !unpublished && (
           <div className="dialog-body" style={{ paddingBottom: 12, overflow: 'visible' }}>
             <div className="segmented">
               {CHANNELS.map((c) => (
@@ -88,8 +89,9 @@ export function InstallSheet() {
             </div>
           )}
           {noSource && <NoSource onClose={() => setOpen(false)} />}
+          {unpublished && <Unpublished />}
           {!releases && loading && <p className="hint" style={{ padding: 12 }}>Checking for releases…</p>}
-          {releases && !noSource && shown.length === 0 && (
+          {releases && !noSource && !unpublished && shown.length === 0 && (
             <p className="hint" style={{ padding: 12 }}>
               Nothing in the {channel} channel yet.
             </p>
@@ -156,6 +158,28 @@ function ReleaseRow({ release }: { release: Release }) {
             Install
           </button>
         )}
+      </div>
+    </div>
+  )
+}
+
+function Unpublished() {
+  return (
+    <div className="empty" style={{ marginTop: 32 }}>
+      <h2>No engine releases yet</h2>
+      <p>
+        Nothing has been published yet. Until the first release, install an engine archive from a file, or locate an engine
+        you built yourself.
+      </p>
+      <div className="empty-actions">
+        <button className="btn" onClick={() => void installFromFile()}>
+          <Icon name="file" size={14} />
+          Install from a file…
+        </button>
+        <button className="btn" onClick={() => void locateEngine()}>
+          <Icon name="folderOpen" size={14} />
+          Locate an engine…
+        </button>
       </div>
     </div>
   )

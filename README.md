@@ -8,8 +8,10 @@ The engine releases it installs are verified before anything is unpacked: each o
 signature. The design, including every format the launcher and the engine share, is in
 [docs/DESIGN.md](docs/DESIGN.md).
 
-**Status:** the core, the `voxup` command line and the launcher window work, including moving projects between
-engine versions with a backup first. Self-update is next. There are no engine releases to install until engine milestone M3, so for now the launcher can be tried
+**Status:** the core, the `voxup` command line and the launcher window work. That includes moving projects between
+engine versions with a backup first, and updating the launcher itself. Releases are published to
+[VoxearReleases](https://github.com/CookieJarTools/VoxearReleases) with `voxear-release`; nothing has been
+published yet. There are no engine releases to install until engine milestone M3, so for now the launcher can be tried
 against a fake release folder (below).
 
 ## Requirements
@@ -68,6 +70,8 @@ voxup templates                   what an engine version offers for new projects
 voxup upgrade [folder] --to 0.3   move a project to another version, backing it up first
 voxup backups [folder]            project backups, newest first
 voxup restore <archive>           restore a backup into a new folder beside the project
+
+voxup self update [--check]       update this voxup from the launcher's own releases
 ```
 
 `VOXUP_HOME` moves the launcher's folder, which is `~/.local/share/voxear` on Linux and `%LOCALAPPDATA%\Voxear`
@@ -92,11 +96,21 @@ export VOXUP_HOME=/tmp/voxup-home
 Then try `voxup list --available`, `voxup install stable`, `voxup new Orbit -l /tmp` and `voxup projects`. With
 `VOXUP_HOME` still set, `npm run tauri dev` in `app/` opens the window on the same trial folder.
 
+## Publishing releases
+
+`voxear-release` makes the signing keys, signs engine archives and launcher builds, and writes the manifests the
+launcher reads. "Publishing releases" in the design explains each step.
+
+```bash
+cargo run -p voxear_release -- --help
+```
+
 ## Layout
 
 ```
 crates/voxear_launcher   the core: manifests, signatures, installs, projects, the new-project flow
 crates/voxup             the command line
+crates/voxear_release    the release tool: keys, signing and manifests
 app/                     the launcher window: React front end in src/, Tauri commands in src-tauri/
 docs/                    the design
 ```

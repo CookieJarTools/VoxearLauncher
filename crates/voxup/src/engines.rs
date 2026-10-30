@@ -17,7 +17,19 @@ pub fn list(launcher: &Launcher, available: bool) -> Result<()> {
     let mut rows: Vec<Vec<String>> = installs.iter().map(install_row).collect();
 
     if available {
-        let releases = launcher.releases()?;
+        let releases = match launcher.releases() {
+            Ok(releases) => releases,
+            Err(error) if voxear_launcher::fetch::is_not_found(&error) => {
+                if rows.is_empty() {
+                    println!("No engine versions are installed, and none are published yet.");
+                } else {
+                    ui::table(&rows);
+                    ui::hint("No engine releases are published yet.");
+                }
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
         for release in releases.manifest.available(launcher.store.platform()) {
             if installs.iter().any(|install| install.version == release.version) {
                 continue;

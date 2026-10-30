@@ -41,7 +41,15 @@ export interface Releases {
   source: string | null
   releases: Release[]
   stale: string | null
+  /** Nothing has been published at the source yet. */
+  unpublished: boolean
 }
+
+export type UpdateStatus =
+  | { kind: 'notSetUp'; reason: string }
+  | { kind: 'nothingPublished' }
+  | { kind: 'upToDate'; version: string }
+  | { kind: 'available'; version: string; notes: string | null; date: string | null }
 
 export type Progress =
   | { phase: 'downloading'; done: number; total: number }
@@ -100,6 +108,7 @@ export interface Settings {
   releases?: string
   trusted_keys?: string[]
   project_location?: string
+  launcher_channel?: 'stable' | 'beta'
 }
 
 export interface Failure {
@@ -182,6 +191,9 @@ export interface Api {
   listBackups(path: string | null): Promise<Backup[]>
   restoreBackup(archive: string): Promise<string>
   deleteBackup(archive: string): Promise<void>
+  checkLauncherUpdate(): Promise<UpdateStatus>
+  installLauncherUpdate(onProgress: (progress: { done: number; total: number | null }) => void): Promise<void>
+  restartLauncher(): Promise<void>
   pickFolder(title: string, defaultPath?: string): Promise<string | null>
   pickFile(title: string, name: string, extensions: string[]): Promise<string | null>
   reveal(path: string): Promise<void>
@@ -225,6 +237,9 @@ const tauriApi: Api = {
   listBackups: (path) => invoke('list_backups', { path }),
   restoreBackup: (archive) => invoke('restore_backup', { archive }),
   deleteBackup: (archive) => invoke('delete_backup', { archive }),
+  checkLauncherUpdate: () => invoke('check_launcher_update'),
+  installLauncherUpdate: (onProgress) => invoke('install_launcher_update', { onProgress: channel(onProgress) }),
+  restartLauncher: () => invoke('restart_launcher'),
   pickFolder: async (title, defaultPath) => {
     const picked = await open({ directory: true, title, defaultPath })
     return typeof picked === 'string' ? picked : null

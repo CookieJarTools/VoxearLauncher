@@ -94,6 +94,8 @@ pub struct ReleasesDto {
     pub releases: Vec<ReleaseDto>,
     /// Why the saved list was shown instead of a fresh one.
     pub stale: Option<String>,
+    /// Nothing has been published at the source yet.
+    pub unpublished: bool,
 }
 
 #[derive(Serialize)]
@@ -190,6 +192,32 @@ impl From<NewProjectForm> for NewProject {
         project.steam_app_id = form.steam_app_id;
         project
     }
+}
+
+/// Whether a newer launcher is out.
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum UpdateStatusDto {
+    /// This build can't update itself, and why.
+    NotSetUp {
+        reason: String,
+    },
+    NothingPublished,
+    UpToDate {
+        version: String,
+    },
+    Available {
+        version: String,
+        notes: Option<String>,
+        date: Option<String>,
+    },
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadDto {
+    pub done: u64,
+    pub total: Option<u64>,
 }
 
 /// The engine versions a project could move to.

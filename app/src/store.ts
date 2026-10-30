@@ -1,6 +1,6 @@
 import type { MouseEvent } from 'react'
 import { create } from 'zustand'
-import { api, failure, type AppInfo, type Install, type Progress, type Project, type Releases } from './api'
+import { api, failure, type AppInfo, type Install, type Progress, type Project, type Releases, type UpdateStatus } from './api'
 import type { IconName } from './components/Icon'
 
 export type View = 'projects' | 'installs' | 'settings'
@@ -22,6 +22,13 @@ export interface Toast {
   message: string
   action?: { label: string; run: () => void }
 }
+
+/** The launcher's own update: what the last check found, and how far installing it has got. */
+export type LauncherUpdate =
+  | { state: 'idle'; status: UpdateStatus | null; checkedAt: number | null; error?: string }
+  | { state: 'checking' }
+  | { state: 'downloading'; version: string; done: number; total: number | null }
+  | { state: 'ready'; version: string }
 
 export type MenuEntry = { label: string; icon?: IconName; danger?: boolean; run: () => void } | 'divider'
 
@@ -55,6 +62,7 @@ interface State {
   upgrading: Project | null
   /** The project whose backups are shown. */
   backupsOf: Project | null
+  launcherUpdate: LauncherUpdate
 
   setView(view: View): void
   init(): Promise<void>
@@ -76,6 +84,8 @@ interface State {
   setHighlight(path: string | null): void
   openUpgrade(project: Project | null): void
   openBackups(project: Project | null): void
+  checkLauncherUpdate(): Promise<void>
+  installLauncherUpdate(): Promise<void>
 }
 
 let nextToast = 1
@@ -137,6 +147,7 @@ export const useStore = create<State>((set, get) => {
     highlight: null,
     upgrading: null,
     backupsOf: null,
+    launcherUpdate: { state: 'idle', status: null, checkedAt: null },
 
     setView: (view) => set({ view }),
 
@@ -150,6 +161,9 @@ export const useStore = create<State>((set, get) => {
       await get().refresh()
       set({ loaded: true })
       void get().loadReleases()
+      // Check for a newer launcher on start and every six hours, quietly.
+      void get().checkLauncherUpdate()
+      setInterval(() => void get().checkLauncherUpdate(), 6 * 60 * 60 * 1000)
     },
 
     refresh: async () => {
@@ -220,7 +234,33 @@ export const useStore = create<State>((set, get) => {
     setPalette: (palette) => set({ palette }),
     setHighlight: (highlight) => set({ highlight }),
     openUpgrade: (upgrading) => set({ upgrading, palette: false }),
-    openBackups: (backupsOf) => set({ backupsOf, palette: false })
+    openBackups: (backupsOf) => set({ backupsOf, palette: false }),
+
+    checkLauncherUpdate: async () => {
+      const current = get().launcherUpdate
+      if (current.state === 'checking' || current.state === 'downloading' || current.state === 'ready') return
+      set({ launcherUpdate: { state: 'checking' } })
+      try {
+        const status = await api.checkLauncherUpdate()
+        set({ launcherUpdate: { state: 'idle', status, checkedAt: Date.now() } })
+      } catch (error) {
+        set({ launcherUpdate: { state: 'idle', status: null, checkedAt: Date.now(), error: failure(error).message } })
+      }
+    },
+
+    installLauncherUpdate: async () => {
+      const current = get().launcherUpdate
+      if (current.state !== 'idle' || current.status?.kind !== 'available') return
+      const { version } = current.status
+      set({ launcherUpdate: { state: 'downloading', version, done: 0, total: null } })
+      try {
+        await api.installLauncherUpdate(({ done, total }) => set({ launcherUpdate: { state: 'downloading', version, done, total } }))
+        set({ launcherUpdate: { state: 'ready', version } })
+      } catch (error) {
+        set({ launcherUpdate: { state: 'idle', status: current.status, checkedAt: Date.now(), error: failure(error).message } })
+        get().toast('error', failure(error).message)
+      }
+    }
   }
 })
 

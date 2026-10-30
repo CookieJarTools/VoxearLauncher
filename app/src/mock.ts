@@ -121,7 +121,8 @@ export const mockApi: Api = {
     return {
       source: settings.releases ?? null,
       releases: releases.map((release) => ({ ...release, installed: installs.some((i) => i.version === release.version) })),
-      stale: null
+      stale: null,
+      unpublished: false
     }
   },
   install: async (version, onProgress) => {
@@ -243,6 +244,18 @@ export const mockApi: Api = {
     return restored
   },
   deleteBackup: async (archive) => void (backups = backups.filter((b) => b.archive !== archive)),
+  checkLauncherUpdate: async () => {
+    await wait(300)
+    return { kind: 'available', version: '0.2.0', notes: 'Faster installs, and projects line up in columns.', date: ago(5 * hour) }
+  },
+  installLauncherUpdate: async (onProgress) => {
+    const total = 9_800_000
+    for (let done = 0; done <= total; done += total / 20) {
+      onProgress({ done, total })
+      await wait(70)
+    }
+  },
+  restartLauncher: async () => void location.reload(),
   getSettings: async () => ({ ...settings }),
   saveSettings: async (next) => void (settings = { ...next }),
   pickFolder: async (_title, defaultPath) => window.prompt('Folder', defaultPath ?? home),

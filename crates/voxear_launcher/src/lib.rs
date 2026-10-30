@@ -22,6 +22,7 @@ pub mod platform;
 pub mod project;
 pub mod registry;
 pub mod releases;
+pub mod self_update;
 pub mod settings;
 pub mod signing;
 pub mod store;
