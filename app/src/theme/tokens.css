@@ -1,0 +1,99 @@
+/* Voxear design tokens. Like the editor's theme, every colour comes from three inputs: a base hue, an accent hue
+   and a contrast level, mixed in OKLCH so that lightness steps look even. Surfaces are told apart by lightness
+   (elevation), not by heavy borders. */
+
+:root {
+  /* The three inputs. */
+  --base-hue: 268;
+  --accent-hue: 274;
+  --contrast: 1;
+
+  --base-chroma: 0.008;
+
+  /* Surfaces, from recessed to floating. */
+  --surface: oklch(0.155 var(--base-chroma) var(--base-hue));
+  --bg: oklch(0.178 var(--base-chroma) var(--base-hue));
+  --raised: oklch(0.205 var(--base-chroma) var(--base-hue));
+  --hover: oklch(0.228 var(--base-chroma) var(--base-hue));
+  --active: oklch(0.252 var(--base-chroma) var(--base-hue));
+  --elevated: oklch(0.212 var(--base-chroma) var(--base-hue));
+
+  /* Lines: one pixel, low contrast. */
+  --line: oklch(0.255 var(--base-chroma) var(--base-hue));
+  --line-strong: oklch(0.31 var(--base-chroma) var(--base-hue));
+  --line-faint: oklch(0.205 var(--base-chroma) var(--base-hue));
+
+  /* Text. Contrast widens the gap between the three levels. */
+  --text: oklch(0.955 0.004 var(--base-hue));
+  --text-dim: oklch(calc(0.62 + 0.1 * var(--contrast)) 0.008 var(--base-hue));
+  --text-faint: oklch(calc(0.44 + 0.1 * var(--contrast)) 0.01 var(--base-hue));
+
+  /* The accent. */
+  --accent: oklch(0.64 0.135 var(--accent-hue));
+  --accent-hover: oklch(0.69 0.135 var(--accent-hue));
+  --accent-text: oklch(0.8 0.09 var(--accent-hue));
+  --accent-dim: oklch(0.64 0.135 var(--accent-hue) / 0.14);
+  --accent-line: oklch(0.64 0.135 var(--accent-hue) / 0.5);
+
+  /* Meaning, muted to sit with the greys. */
+  --ok: oklch(0.73 0.13 158);
+  --ok-dim: oklch(0.73 0.13 158 / 0.13);
+  --warn: oklch(0.78 0.12 70);
+  --warn-dim: oklch(0.78 0.12 70 / 0.12);
+  --danger: oklch(0.67 0.16 24);
+  --danger-dim: oklch(0.67 0.16 24 / 0.13);
+  --info: oklch(0.72 0.11 245);
+  --info-dim: oklch(0.72 0.11 245 / 0.13);
+
+  /* Channels. */
+  --stable: var(--ok);
+  --stable-dim: var(--ok-dim);
+  --beta: var(--info);
+  --beta-dim: var(--info-dim);
+  --nightly: oklch(0.72 0.12 305);
+  --nightly-dim: oklch(0.72 0.12 305 / 0.13);
+
+  /* Shape and space. */
+  --r-sm: 5px;
+  --r-md: 7px;
+  --r-lg: 10px;
+  --r-xl: 14px;
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+
+  /* Type: Inter, with its optical sizes, so headings get the Display cut. */
+  --font-ui: 'Inter Variable', 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', ui-monospace, monospace;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-lg: 15px;
+  --text-xl: 20px;
+
+  /* Layout. */
+  --titlebar-h: 44px;
+  --sidebar-w: 216px;
+  --row-h: 56px;
+
+  /* Elevation, only for what floats. */
+  --shadow-pop: 0 0 0 1px oklch(0 0 0 / 0.25), 0 12px 32px oklch(0 0 0 / 0.45);
+  --shadow-dialog: 0 0 0 1px oklch(1 0 0 / 0.04), 0 24px 64px oklch(0 0 0 / 0.55);
+
+  /* Motion: short, ease-out, and never blocking input. */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --t-fast: 100ms;
+  --t-med: 140ms;
+  --t-slow: 180ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t-fast: 0ms;
+    --t-med: 0ms;
+    --t-slow: 0ms;
+  }
+}

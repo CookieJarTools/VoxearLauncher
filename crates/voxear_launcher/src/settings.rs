@@ -23,6 +23,9 @@ pub struct Settings {
     /// Keys to trust for engine releases besides the built-in ones, for self-hosted engine builds.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trusted_keys: Vec<String>,
+    /// The folder new projects go in, remembered from the last one created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_location: Option<String>,
 }
 
 impl Settings {

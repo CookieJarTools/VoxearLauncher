@@ -8,14 +8,16 @@ The engine releases it installs are verified before anything is unpacked: each o
 signature. The design, including every format the launcher and the engine share, is in
 [docs/DESIGN.md](docs/DESIGN.md).
 
-**Status:** the core and the `voxup` command line work. The launcher window (Tauri) and self-update are next.
-There are no engine releases to install until engine milestone M3, so for now the launcher can be tried against a
-fake release folder (below).
+**Status:** the core, the `voxup` command line and the launcher window work. Self-update and project upgrades are
+next. There are no engine releases to install until engine milestone M3, so for now the launcher can be tried
+against a fake release folder (below).
 
 ## Requirements
 
-- Rust (stable, 1.89 or newer)
+- Rust (stable, 1.89 or newer; 1.90 for the window)
 - A C compiler, for zstd
+- For the window: Node 20 or newer, plus Tauri's system packages (`webkit2gtk-4.1` on Arch; WebView2 comes with
+  Windows 10 and 11)
 
 ## Build and test
 
@@ -25,6 +27,26 @@ cargo build
 
 ```bash
 cargo test
+```
+
+## The launcher window
+
+```bash
+cd app && npm install
+```
+
+```bash
+npm run tauri dev
+```
+
+`npm run tauri build` makes the AppImage and `.deb` on Linux, and the installer on Windows. `npm run dev` on its
+own serves the front end to a normal browser, at http://localhost:1430, with stand-in data, which is handy for
+working on the look.
+
+The window's commands have their own tests:
+
+```bash
+cd app/src-tauri && cargo test
 ```
 
 ## Using `voxup`
@@ -63,13 +85,15 @@ in `/tmp/voxup-home/settings.toml` and point `voxup` there:
 export VOXUP_HOME=/tmp/voxup-home
 ```
 
-Then try `voxup list --available`, `voxup install stable`, `voxup new Orbit -l /tmp` and `voxup projects`.
+Then try `voxup list --available`, `voxup install stable`, `voxup new Orbit -l /tmp` and `voxup projects`. With
+`VOXUP_HOME` still set, `npm run tauri dev` in `app/` opens the window on the same trial folder.
 
 ## Layout
 
 ```
 crates/voxear_launcher   the core: manifests, signatures, installs, projects, the new-project flow
 crates/voxup             the command line
+app/                     the launcher window: React front end in src/, Tauri commands in src-tauri/
 docs/                    the design
 ```
 

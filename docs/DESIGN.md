@@ -53,7 +53,7 @@ The engine's principles apply here as well. Three matter most:
 crates/
   voxear_launcher   the core: everything the launcher does, with no UI
   voxup             the command line
-app/                the Tauri window (planned)
+app/                the Tauri window: React front end in src/, Rust commands in src-tauri/
 docs/               this document
 ```
 
@@ -433,33 +433,73 @@ opening a window. Settings › "Command line" puts a `voxup` shim on the PATH: `
 launcher updates update `voxup` too. A standalone `voxup` binary is also published, for CI and headless machines.
 `voxup self update` (planned) updates a standalone `voxup` from the same manifest, using the same signature check.
 
-## The launcher window (planned)
+## The launcher window
+
+The window lives in `app/`: a React 19, Vite and TypeScript front end in `app/src`, and the Tauri 2 shell in
+`app/src-tauri`, whose commands call `voxear_launcher`. The shell is its own Cargo workspace, so building and
+testing the core never needs Node.
 
 **Look.** The same direction as the engine's editor: Unity's dark concept crossed with Linear.
-- Surfaces are separated by elevation rather than borders, with 1 px separators.
-- OKLCH theme tokens generated from base, accent and contrast, shared with the editor's theme generator.
-- Inter and Inter Display.
-- Transitions of 100–180 ms with ease-out curves, which never block input. Reduced-motion settings are
-  respected.
+- Surfaces are separated by lightness (elevation) rather than borders, with 1 px separators.
+- Every colour comes from three OKLCH inputs, `--base-hue`, `--accent-hue` and `--contrast`, in
+  `app/src/theme/tokens.css`. The editor's theme generator should use the same scheme.
+- Inter, bundled, with its optical-size axis, so large headings get the Inter Display cut.
+- Transitions of 100–180 ms with ease-out curves, which never block input. Reduced-motion settings turn them off.
+- A frameless window with its own title bar, as in Whisk.
 
 **Screens.**
-- **Projects:** a searchable list (fuzzy, `/` to focus) with favourites, an engine version chip on each row (amber
-  with an inline **Install** when the version is missing), and the last-opened time. **New project** is the
-  primary button and **Add** the secondary one. Rows have a context menu: open, show in files, change engine
-  version, favourite, remove from list.
-- **Installs:** each version with its channel badge, size on disk and a "located" tag. **Install version** opens a
-  sheet with Stable, Beta and Nightly tabs and release notes. Progress shows in place, through download, verify
-  and unpack.
-- **New project:** a template gallery, with name, location and version beside it, the default-setup toggles, and
-  a collapsed extras section. `Enter` creates the project. Steps stream in from `vox new`.
-- **Settings:** release source, channels shown, extra trusted keys, the command-line shim, and update checks.
+- **Projects:**
+  - A list with fuzzy search (`/` focuses it, arrow keys move, `Enter` opens) and favourites first.
+  - Each row has a coloured initial, the path, an engine-version chip and the time it was last opened.
+  - A missing version shows an amber **Install 0.2.0** chip that queues the install.
+  - Each row has a menu: open, show in files, favourite, remove from list.
+  - **New project** is the primary button and **Add** the secondary one.
+- **Installs:**
+  - Each version shows its channel badge, size on disk, when it was installed, and a "Located" tag where it
+    applies.
+  - Installs run one at a time from a queue (the core's lock allows only one). Each one shows as a card with
+    its phase, progress and **Cancel**; a failed one offers **Try again**.
+  - Uninstalling asks first and names the projects pinned to the version. Forgetting a located engine says that
+    its files stay.
+- **Install a version:** a sheet with Stable, Beta and Nightly tabs, sizes, ages and release notes. It explains when
+  no release source is set, and shows the saved list, with a note, when the source can't be reached. Installing
+  from a file and locating an engine are in its footer.
+- **New project:**
+  - A template gallery. The thumbnails are line drawings in the launcher until the engine ships thumbnails of its
+    own.
+  - Beside it: name and location, the engine version, the default-setup toggles, and collapsed extras (IDE, Git,
+    modding, Steam App ID).
+  - Every field comes from that version's `vox new --describe`.
+  - The name and folder are checked as they're typed. Ctrl+Enter creates the project, and the steps stream in
+    from `vox new`.
+  - When it's done, the project is selected in the list, and a toast offers **Open**.
+- **Settings:** the release source, extra trusted keys, the folder new projects go in, and where the launcher
+  keeps its files.
 
-**Speed.** Ctrl+K opens a command palette over every action, project and version. Ctrl+N starts a new project,
-and `Enter` opens the selected one.
+**Speed.**
+- Ctrl+K opens a command palette over every action, project and version.
+- Ctrl+N starts a new project; Ctrl+1, Ctrl+2 and Ctrl+, switch screens.
+- F5 refreshes, and the lists also refresh whenever the window gains focus, to pick up changes made through
+  `voxup`.
 
-**Bridge.** Tauri commands call `voxear_launcher` on a worker thread. Install progress streams through a Tauri
-`Channel` of `Progress` values. Cancelling sets the install's cancel flag, and the core reports a `Cancelled`
-error, which the UI shows as cancelled rather than failed.
+**Bridge.**
+- Each command runs `voxear_launcher` on a worker thread, so a slow disk never freezes the window.
+- Install progress and `vox new` steps stream through Tauri channels.
+- Cancelling sets the install's cancel flag. The core then reports `Cancelled`, which the window shows as
+  cancelled rather than failed.
+- Errors arrive as `{ message, cancelled }`. The core's `backticked` names render as code.
+
+**Previews and tests.**
+- Opened in a plain browser (`npm run dev`), the front end uses an in-memory stand-in for the commands
+  (`app/src/mock.ts`), so every screen can be previewed without Tauri.
+- `cargo test` in `app/src-tauri` calls the real commands through Tauri's IPC, with the front end's command
+  names, camelCase arguments and channel format, against a fake signed release.
+
+**Still to come in the window:**
+- self-update and its sidebar card
+- the command-line shim setting
+- changing a project's engine version, with a backup (see "Upgrading")
+- template thumbnails from the engine
 
 ## Settings and environment
 
@@ -468,6 +508,7 @@ error, which the UI shows as cancelled rather than failed.
 ```toml
 releases = "https://…/releases.toml"   # where engine releases are listed
 trusted_keys = ["RWQ…"]                 # extra keys for self-hosted engine builds
+project_location = "/home/jeo/VoxearProjects"   # remembered from the last new project
 ```
 
 | Variable | Effect |
@@ -534,6 +575,6 @@ These are the engine-side parts of the contract. The launcher stubs them in its 
 | New-project flow against `vox new` | Done, tested against a fake engine |
 | `voxup` command line | Done |
 | Opening projects | Done; waits for the editor (M3) |
-| Launcher window (Tauri) | Planned |
+| Launcher window (Tauri): projects, installs, new project, settings, palette | Done; commands tested through IPC |
 | Self-update | Planned |
 | Project upgrades with backups | Planned |
