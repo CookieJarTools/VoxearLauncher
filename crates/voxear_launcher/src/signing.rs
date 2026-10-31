@@ -11,10 +11,10 @@ use minisign_verify::{Error as MinisignError, PublicKey, Signature};
 
 /// The public keys engine releases are signed with, built into the launcher. A signature names the key that
 /// made it, so a new key can be added here before the old one is retired.
-///
-/// Empty until the release key is generated (see "Signing keys" in `docs/DESIGN.md`). Until then only keys
-/// listed in the launcher's settings are trusted.
-pub const ENGINE_RELEASE_KEYS: &[&str] = &[];
+pub const ENGINE_RELEASE_KEYS: &[&str] = &[
+    // The engine release key, 4B25CB4CB88433F4, made 2026-10-31.
+    "RWT0M4S4TMslS1Lg4k5jY4KJ8dMqEKipBFRlPzS5M0HS2+jtghspk77f",
+];
 
 #[derive(Clone, Debug, Default)]
 pub struct TrustedKeys {

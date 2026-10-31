@@ -161,9 +161,8 @@ Everything is signed with **minisign** keys: Ed25519 over a BLAKE2b pre-hash. Th
 - The launcher's own updates use a **separate key**, so a leaked engine key can't push a launcher update, and
   the reverse.
 
-**Signing keys (to do).** Neither key exists yet.
-- Until the engine key does, only keys in the settings are trusted.
-- Until the launcher key does, the launcher can't update itself.
+**Signing keys.** The engine key exists (`4B25CB4CB88433F4`, in `ENGINE_RELEASE_KEYS`) and is kept offline. The
+launcher key does not exist yet, so until it does the launcher can't update itself.
 
 The secret keys belong offline or in CI secrets, never in a repository. `voxear-release` makes both (it asks for
 a password to encrypt each one):
