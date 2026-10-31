@@ -150,6 +150,7 @@ pub enum Event {
 
 /// Asks an engine version what its `vox new` offers.
 pub fn describe(install: &Install) -> Result<Offer> {
+    ensure_makes_projects(install)?;
     let vox = install.vox();
     let output = engine::command(&install.path, &vox)
         .args(["new", "--describe", "--json"])
@@ -174,9 +175,22 @@ pub fn describe(install: &Install) -> Result<Offer> {
     Ok(offer)
 }
 
+/// Whether an engine version has `vox new` at all, as its `engine.toml` says, so a version without it says so
+/// plainly rather than failing to run a command it doesn't have.
+fn ensure_makes_projects(install: &Install) -> Result<()> {
+    let info = engine::EngineInfo::read(&install.path)?;
+    ensure!(
+        info.supports.new.is_some(),
+        "Voxear {} can't create projects: it's older than `vox new`. Pick a newer version.",
+        install.version
+    );
+    Ok(())
+}
+
 /// Creates a project with an engine version's `vox new`, passing each step it reports to `on_step`. Returns
 /// the project folder.
 pub fn create(install: &Install, project: &NewProject, on_step: &mut dyn FnMut(&str)) -> Result<PathBuf> {
+    ensure_makes_projects(install)?;
     let mut done = None;
     let mut failure = None;
     let mut command = engine::command(&install.path, &install.vox());
@@ -365,6 +379,33 @@ mod tests {
         let listed = registry.projects(&store.list().unwrap());
         assert_eq!(listed[0].engine, Some(semver::Version::new(0, 3, 0)), "vox new pins its own version");
         assert_eq!(listed[0].status, ProjectStatus::Ready);
+    }
+
+    #[test]
+    fn a_version_without_vox_new_says_so_without_running_it() {
+        use std::sync::atomic::AtomicBool;
+
+        use crate::channel::Channel;
+        use crate::layout::Layout;
+        use crate::platform::Platform;
+        use crate::store::Store;
+        use crate::testing::FakeReleases;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut fake = FakeReleases::new(dir.path().join("mirror"));
+        fake.add("0.1.0", Channel::Stable);
+        let url = fake.write();
+        let store = Store::new(Layout::new(dir.path().join("home")), Platform::current().unwrap());
+        let release = fake.manifest.find(&semver::Version::new(0, 1, 0)).unwrap();
+        let install = store.install(release, &url, &fake.trusted_keys(), &mut |_| {}, &AtomicBool::new(false)).unwrap();
+        // As the first engine releases are: no contracts in [supports].
+        let file = install.path.join(engine::ENGINE_FILE);
+        let text = std::fs::read_to_string(&file).unwrap();
+        let without: String = text.lines().filter(|line| !line.starts_with("new =")).map(|l| format!("{l}\n")).collect();
+        std::fs::write(&file, without).unwrap();
+
+        let error = describe(&install).unwrap_err().to_string();
+        assert!(error.contains("older than `vox new`"), "{error}");
     }
 
     #[test]
