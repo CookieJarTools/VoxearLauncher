@@ -6,7 +6,7 @@ use std::sync::atomic::AtomicBool;
 use anyhow::{Context, Result, anyhow, bail};
 use console::style;
 use semver::Version;
-use voxear_launcher::manifest::SIGNATURE_SUFFIX;
+use voxear_launcher::manifest::{MANUAL, SIGNATURE_SUFFIX};
 use voxear_launcher::{Install, InstallKind, Removed, Selector};
 
 use crate::Launcher;
@@ -35,7 +35,13 @@ pub fn list(launcher: &Launcher, available: bool) -> Result<()> {
                 continue;
             }
             let note = if release.needs_newer_launcher() { "needs a newer launcher" } else { "available" };
-            rows.push(vec![release.version.to_string(), release.channel.to_string(), style(note).dim().to_string()]);
+            let row = vec![
+                release.version.to_string(),
+                release.channel.to_string(),
+                String::new(),
+                style(note).dim().to_string(),
+            ];
+            rows.push(row);
         }
         rows.sort_by_key(|row| std::cmp::Reverse(version_of(row)));
     }
@@ -57,14 +63,20 @@ fn install_row(install: &Install) -> Vec<String> {
     if install.missing {
         path.push_str(&style(" (folder not found)").yellow().to_string());
     }
-    vec![style(&install.version).bold().to_string(), install.channel.to_string(), path]
+    let manual = if install.has_module(MANUAL) { style("manual").dim().to_string() } else { String::new() };
+    vec![style(&install.version).bold().to_string(), install.channel.to_string(), manual, path]
 }
 
 fn version_of(row: &[String]) -> Option<Version> {
     Version::parse(&console::strip_ansi_codes(&row[0])).ok()
 }
 
-pub fn install(launcher: &Launcher, version: Option<String>, file: Option<PathBuf>) -> Result<()> {
+pub fn install(
+    launcher: &Launcher,
+    version: Option<String>,
+    file: Option<PathBuf>,
+    without_manual: bool,
+) -> Result<()> {
     let keys = launcher.keys()?;
     let mut bar = InstallBar::new();
 
@@ -90,11 +102,59 @@ pub fn install(launcher: &Launcher, version: Option<String>, file: Option<PathBu
         return Ok(());
     }
 
+    let without = if without_manual { vec![MANUAL.to_owned()] } else { Vec::new() };
     let cancel = AtomicBool::new(false);
-    let install = launcher.store.install(release, &releases.url, &keys, &mut |p| bar.update(p), &cancel)?;
+    let install =
+        launcher.store.install_without(release, &releases.url, &keys, &without, &mut |p| bar.update(p), &cancel)?;
     bar.finish();
-    ui::done(&format!("Installed Voxear {} ({}) in {}", install.version, install.channel, ui::pretty(&install.path)));
+    let with = if install.has_module(MANUAL) { ", with the manual" } else { "" };
+    ui::done(&format!(
+        "Installed Voxear {} ({}{with}) in {}",
+        install.version,
+        install.channel,
+        ui::pretty(&install.path)
+    ));
+    if without_manual && release.module(MANUAL).is_some() {
+        ui::hint(&format!("Add the manual later with `voxup manual add {}`.", install.version));
+    }
     Ok(())
+}
+
+#[derive(clap::Subcommand)]
+pub enum ManualCommand {
+    /// Download and add the Voxear Manual to an installed version.
+    Add { version: String },
+    /// Remove the Voxear Manual from an installed version, keeping the engine.
+    Remove { version: String },
+}
+
+pub fn manual(launcher: &Launcher, command: ManualCommand) -> Result<()> {
+    match command {
+        ManualCommand::Add { version } => {
+            let version = exact(&version)?;
+            let releases = launcher.releases()?;
+            let release = releases
+                .manifest
+                .find(&version)
+                .ok_or_else(|| anyhow!("Voxear {version} isn't in the release list, so its manual can't be found"))?;
+            let keys = launcher.keys()?;
+            let mut bar = InstallBar::new();
+            let cancel = AtomicBool::new(false);
+            launcher.store.add_module(release, MANUAL, &releases.url, &keys, &mut |p| bar.update(p), &cancel)?;
+            bar.finish();
+            ui::done(&format!("Added the manual to Voxear {version}"));
+        }
+        ManualCommand::Remove { version } => {
+            let version = exact(&version)?;
+            launcher.store.remove_module(&version, MANUAL)?;
+            ui::done(&format!("Removed the manual from Voxear {version}"));
+        }
+    }
+    Ok(())
+}
+
+fn exact(version: &str) -> Result<Version> {
+    Version::parse(version).with_context(|| format!("`{version}` isn't an exact version, such as 0.3.0"))
 }
 
 fn signature_path(archive: &Path) -> PathBuf {

@@ -41,7 +41,13 @@ enum Command {
         /// Install an engine archive from disk instead. Its signature must sit next to it, as <ARCHIVE>.minisig.
         #[arg(long, value_name = "ARCHIVE", conflicts_with = "version")]
         file: Option<PathBuf>,
+        /// Leave out the Voxear Manual, which is otherwise installed with the engine when the release offers it.
+        #[arg(long)]
+        without_manual: bool,
     },
+    /// Add the Voxear Manual to an installed version, or remove it.
+    #[command(subcommand)]
+    Manual(engines::ManualCommand),
     /// Uninstall an engine version. An engine added with `locate` is forgotten, and its files are kept.
     Uninstall {
         version: String,
@@ -108,7 +114,10 @@ fn run(cli: Cli) -> Result<()> {
     let launcher = Launcher::new(cli.releases)?;
     match cli.command {
         Command::List { available } => engines::list(&launcher, available),
-        Command::Install { version, file } => engines::install(&launcher, version, file),
+        Command::Install { version, file, without_manual } => {
+            engines::install(&launcher, version, file, without_manual)
+        }
+        Command::Manual(command) => engines::manual(&launcher, command),
         Command::Uninstall { version, force } => engines::uninstall(&launcher, &version, force),
         Command::Locate { folder } => engines::locate(&launcher, &folder),
         Command::Projects => projects::list(&launcher),

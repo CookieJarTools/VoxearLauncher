@@ -45,6 +45,27 @@ pub struct InstallDto {
     pub located: bool,
     pub missing: bool,
     pub installed: Option<String>,
+    /// Optional parts, such as the manual: what's in the install, and what its release offers. Filled in by
+    /// `list_installs`.
+    pub modules: Vec<InstallModuleDto>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallModuleDto {
+    pub name: String,
+    pub title: String,
+    pub installed: bool,
+    /// The release offers it, so it can be added.
+    pub available: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModuleDto {
+    pub name: String,
+    pub title: String,
+    pub size: u64,
 }
 
 impl From<&Install> for InstallDto {
@@ -56,6 +77,7 @@ impl From<&Install> for InstallDto {
             located: install.kind == InstallKind::Located,
             missing: install.missing,
             installed: install.installed.map(|time| time.to_string()),
+            modules: Vec::new(),
         }
     }
 }
@@ -70,6 +92,7 @@ pub struct ReleaseDto {
     pub size: u64,
     pub installed: bool,
     pub needs_newer_launcher: bool,
+    pub modules: Vec<ModuleDto>,
 }
 
 impl ReleaseDto {
@@ -82,6 +105,11 @@ impl ReleaseDto {
             size,
             installed,
             needs_newer_launcher: release.needs_newer_launcher(),
+            modules: release
+                .modules
+                .iter()
+                .map(|module| ModuleDto { name: module.name.clone(), title: module.title.clone(), size: module.size })
+                .collect(),
         }
     }
 }

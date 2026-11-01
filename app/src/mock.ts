@@ -33,13 +33,14 @@ const offer: Offer = {
   ]
 }
 
-let installs: Install[] = [
+/** What's installed; `listInstalls` adds which modules each one has. */
+let installs: Omit<Install, 'modules'>[] = [
   { version: '0.3.0-beta.1', channel: 'beta', path: `${engines}/0.3.0-beta.1`, located: false, missing: false, installed: ago(30 * hour) },
   { version: '0.2.0', channel: 'stable', path: `${engines}/0.2.0`, located: false, missing: false, installed: ago(9 * 24 * hour) },
   { version: '0.4.0-dev', channel: 'nightly', path: `${home}/Dev/Voxear/dist`, located: true, missing: false, installed: null }
 ]
 
-const releases: Omit<Release, 'installed'>[] = [
+const releases: Omit<Release, 'installed' | 'modules'>[] = [
   { version: '0.3.0-nightly.20261030', channel: 'nightly', published: ago(5 * hour), notes: null, size: 418_000_000, needsNewerLauncher: false },
   { version: '0.3.0-nightly.20261029', channel: 'nightly', published: ago(29 * hour), notes: null, size: 417_000_000, needsNewerLauncher: false },
   { version: '0.3.0-beta.1', channel: 'beta', published: ago(2 * 24 * hour), notes: 'https://example.invalid/0.3.0-beta.1', size: 405_000_000, needsNewerLauncher: false },
@@ -57,6 +58,9 @@ let projects: Project[] = [
 ]
 
 let settings: Settings = { releases: 'https://releases.example.invalid/voxear/releases.toml' }
+const manual = { name: 'manual', title: 'Voxear Manual', size: 18_400_000 }
+/** Versions whose install has the manual. */
+const manuals = new Set(['0.3.0-beta.1'])
 let backups: Backup[] = [
   {
     archive: `${home}/.local/share/voxear/backups/Orbit-1a2b3c4d/20261012T101500Z.tar.zst`,
@@ -102,6 +106,11 @@ async function simulateInstall(key: string, size: number, onProgress: (progress:
   await wait(250)
 }
 
+/** The newer fake releases ship the manual as a module; 0.2.0 and older carry none. */
+function offersManual(version: string): boolean {
+  return !['0.2.0', '0.1.0'].includes(version)
+}
+
 function sortInstalls() {
   installs.sort((a, b) => b.version.localeCompare(a.version, undefined, { numeric: true }))
 }
@@ -115,36 +124,52 @@ export const mockApi: Api = {
     settingsFile: `${home}/.local/share/voxear/settings.toml`,
     defaultLocation: settings.project_location ?? `${home}/VoxearProjects`
   }),
-  listInstalls: async () => installs.map((install) => ({ ...install })),
+  listInstalls: async (): Promise<Install[]> =>
+    installs.map((install) => {
+      const offered = offersManual(install.version)
+      const installed = manuals.has(install.version)
+      const modules = offered || installed ? [{ name: 'manual', title: manual.title, installed, available: offered && !install.located }] : []
+      return { ...install, modules }
+    }),
   listReleases: async () => {
     await wait(350)
     return {
       source: settings.releases ?? null,
-      releases: releases.map((release) => ({ ...release, installed: installs.some((i) => i.version === release.version) })),
+      releases: releases.map((release) => ({
+        ...release,
+        installed: installs.some((i) => i.version === release.version),
+        modules: offersManual(release.version) ? [manual] : []
+      })),
       stale: null,
       unpublished: false
     }
   },
-  install: async (version, onProgress) => {
+  install: async (version, without, onProgress) => {
     const release = releases.find((r) => r.version === version) ?? releases.find((r) => r.channel === version)
     if (!release) throw { message: `Voxear ${version} isn't in the release list`, cancelled: false }
     await simulateInstall(version, release.size, onProgress)
-    const install: Install = { version: release.version, channel: release.channel, path: `${engines}/${release.version}`, located: false, missing: false, installed: new Date().toISOString() }
+    const install = { version: release.version, channel: release.channel, path: `${engines}/${release.version}`, located: false, missing: false, installed: new Date().toISOString() }
     installs.push(install)
+    if (offersManual(release.version) && !without.includes('manual')) manuals.add(release.version)
     sortInstalls()
     refreshStatuses()
-    return install
+    return { ...install, modules: [] }
   },
   cancelInstall: async (version) => void cancelled.add(version),
+  addModule: async (version, _name, onProgress) => {
+    await simulateInstall(`${version}+manual`, manual.size, onProgress)
+    manuals.add(version)
+  },
+  removeModule: async (version) => void manuals.delete(version),
   installFile: async (path, onProgress) => {
     await simulateInstall(path, 300_000_000, onProgress)
-    const install: Install = { version: '0.5.0-beta.1', channel: 'beta', path: `${engines}/0.5.0-beta.1`, located: false, missing: false, installed: new Date().toISOString() }
+    const install: Install = { version: '0.5.0-beta.1', channel: 'beta', path: `${engines}/0.5.0-beta.1`, located: false, missing: false, installed: new Date().toISOString(), modules: [] }
     installs.push(install)
     sortInstalls()
     return install
   },
   locate: async (path) => {
-    const install: Install = { version: '0.4.1-dev', channel: 'nightly', path, located: true, missing: false, installed: null }
+    const install: Install = { version: '0.4.1-dev', channel: 'nightly', path, located: true, missing: false, installed: null, modules: [] }
     installs.push(install)
     sortInstalls()
     return install

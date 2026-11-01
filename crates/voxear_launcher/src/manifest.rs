@@ -45,6 +45,52 @@ pub struct Release {
     pub yanked: bool,
     #[serde(default, rename = "download")]
     pub downloads: Vec<Download>,
+    /// Optional parts that are the same on every platform, such as the manual, each unpacked into a folder of its
+    /// own in the install. Releases from before modules existed have none, and older launchers ignore them.
+    #[serde(default, rename = "module", skip_serializing_if = "Vec::is_empty")]
+    pub modules: Vec<Module>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Module {
+    /// Also the folder it unpacks into, such as `manual`.
+    pub name: String,
+    /// What the launcher calls it, such as "Voxear Manual".
+    pub title: String,
+    /// Absolute, or relative to the manifest's own URL.
+    pub url: String,
+    /// The archive's size in bytes.
+    pub size: u64,
+    /// The archive's SHA-256, in hex.
+    pub sha256: String,
+    /// The archive's minisign signature: the whole `.minisig` file.
+    pub signature: String,
+}
+
+/// The manual: Markdown pages and pictures the editor shows from `<install>/manual/` when they are there.
+pub const MANUAL: &str = "manual";
+
+/// Folders an engine install has of its own, which no module may claim.
+const ENGINE_FOLDERS: &[&str] = &["bin", "managed", "templates", "docs"];
+
+/// What the launcher calls a module when nothing says otherwise.
+pub fn module_title(name: &str) -> String {
+    match name {
+        MANUAL => "Voxear Manual".to_owned(),
+        _ => {
+            let mut chars = name.chars();
+            chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
+        }
+    }
+}
+
+/// A module's name is a plain folder name: lowercase letters, digits and dashes, starting with a letter, and none
+/// of the engine's own folders.
+pub fn is_module_name(name: &str) -> bool {
+    name.len() <= 32
+        && name.starts_with(|c: char| c.is_ascii_lowercase())
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && !ENGINE_FOLDERS.contains(&name)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -141,6 +187,10 @@ impl Release {
         self.downloads.iter().find(|download| download.platform == platform.as_str())
     }
 
+    pub fn module(&self, name: &str) -> Option<&Module> {
+        self.modules.iter().find(|module| module.name == name)
+    }
+
     /// Whether this launcher is too old to install the release.
     pub fn needs_newer_launcher(&self) -> bool {
         self.min_launcher.as_ref().is_some_and(|min| &crate::launcher_version() < min)
@@ -164,6 +214,24 @@ impl Release {
             if !is_sha256(&download.sha256) {
                 bail!("the {} download for {} has a malformed SHA-256", download.platform, self.version);
             }
+        }
+        let mut names = HashSet::new();
+        for module in &self.modules {
+            ensure!(
+                is_module_name(&module.name),
+                "{} has a module called `{}`, which isn't allowed",
+                self.version,
+                module.name
+            );
+            ensure!(names.insert(module.name.as_str()), "{} lists the {} module twice", self.version, module.name);
+            ensure!(!module.title.trim().is_empty(), "the {} module of {} has no title", module.name, self.version);
+            ensure!(!module.url.trim().is_empty(), "the {} module of {} has no URL", module.name, self.version);
+            ensure!(
+                is_sha256(&module.sha256),
+                "the {} module of {} has a malformed SHA-256",
+                module.name,
+                self.version
+            );
         }
         Ok(())
     }
@@ -315,6 +383,35 @@ signature = "sig"
         assert_eq!(between(Some("0.2.0"), "0.4.0-beta.2"), ["0.3.0", "0.3.1", "0.4.0-beta.2"]);
         assert_eq!(between(None, "0.3.0"), ["0.3.0"]);
         assert!(between(Some("0.3.0"), "0.2.0").is_empty());
+    }
+
+    fn module(name: &str) -> String {
+        format!(
+            "\n[[release.module]]\nname = \"{name}\"\ntitle = \"Voxear Manual\"\nurl = \"voxear-0.3.0-{name}.tar.zst\"\nsize = 512\nsha256 = \"{HASH}\"\nsignature = \"sig\"\n"
+        )
+    }
+
+    #[test]
+    fn reads_optional_modules() {
+        let manifest =
+            ReleaseManifest::parse(&manifest(&(release("0.3.0", "stable", "") + &module("manual")))).unwrap();
+        let release = manifest.find(&v("0.3.0")).unwrap();
+        assert_eq!(release.module(MANUAL).unwrap().size, 512);
+        assert!(sample().find(&v("0.3.0")).unwrap().modules.is_empty(), "older releases have none");
+        let again = ReleaseManifest::parse(&manifest.to_toml().unwrap()).unwrap();
+        assert_eq!(again.find(&v("0.3.0")).unwrap().modules, release.modules);
+    }
+
+    #[test]
+    fn refuses_modules_that_would_claim_engine_folders() {
+        for bad in ["bin", "Manual", "../manual", "two words", ""] {
+            let text = manifest(&(release("0.3.0", "stable", "") + &module(bad)));
+            assert!(ReleaseManifest::parse(&text).is_err(), "{bad:?} should be refused");
+        }
+        let twice = manifest(&(release("0.3.0", "stable", "") + &module("manual") + &module("manual")));
+        assert!(ReleaseManifest::parse(&twice).is_err());
+        assert_eq!(module_title("manual"), "Voxear Manual");
+        assert_eq!(module_title("samples"), "Samples");
     }
 
     #[test]

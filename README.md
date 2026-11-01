@@ -56,7 +56,9 @@ cd app/src-tauri && cargo test
 ```
 voxup list [--available]          installed engine versions, and those that can be installed
 voxup install stable              the newest stable version (or beta, nightly, 0.3, 0.3.1)
+voxup install 0.3 --without-manual   leave out the Voxear Manual, which otherwise comes with the engine
 voxup install --file <archive>    an archive from disk; its .minisig must sit next to it
+voxup manual add 0.3.0            add the manual to an installed version (or `remove` it)
 voxup uninstall 0.3.0             refuses while projects use it, unless --force
 voxup locate <folder>             use an engine installed elsewhere, such as a source build
 

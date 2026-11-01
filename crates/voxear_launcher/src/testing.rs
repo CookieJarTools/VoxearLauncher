@@ -9,7 +9,9 @@ use semver::Version;
 
 use crate::channel::Channel;
 use crate::engine::{ENGINE_FILE, EngineInfo, Supports};
-use crate::manifest::{Download, FORMAT, MANIFEST_FILE, Release, ReleaseManifest, SIGNATURE_SUFFIX};
+use crate::manifest::{
+    Download, FORMAT, MANIFEST_FILE, MANUAL, Module, Release, ReleaseManifest, SIGNATURE_SUFFIX, module_title,
+};
 use crate::platform::Platform;
 use crate::signing::TrustedKeys;
 use crate::store::hex;
@@ -124,6 +126,17 @@ pub fn engine_archive(version: &Version, channel: Channel, platform: Platform) -
     ])
 }
 
+/// A fake manual, laid out the way `voxear-dist` packs the real one: every entry under `manual/`.
+pub fn manual_archive(version: &Version) -> Vec<u8> {
+    let page = format!("# Voxear {version}\n\nThe manual for this version.\n");
+    tar_zst(&[
+        ArchiveEntry::dir(MANUAL),
+        ArchiveEntry::file("manual/index.md", page.as_bytes(), 0o644),
+        ArchiveEntry::dir("manual/pictures"),
+        ArchiveEntry::file("manual/pictures/editor.png", b"not really a picture", 0o644),
+    ])
+}
+
 /// A folder of fake releases with a signed manifest, laid out the way a release mirror would be.
 pub struct FakeReleases {
     pub dir: PathBuf,
@@ -177,11 +190,37 @@ impl FakeReleases {
                 min_launcher: None,
                 yanked: false,
                 downloads: Vec::new(),
+                modules: Vec::new(),
             });
         }
         let release = self.release(version);
         release.downloads.retain(|existing| existing.platform != platform.as_str());
         release.downloads.push(download);
+    }
+
+    /// Adds the manual as an optional module of `version`, which must already be listed.
+    pub fn add_manual(&mut self, version: &str) {
+        let version = Version::parse(version).expect("test versions are valid");
+        self.add_module(&version, MANUAL, &manual_archive(&version));
+    }
+
+    /// Adds `archive` as the module `name` of `version`, which must already be listed.
+    pub fn add_module(&mut self, version: &Version, name: &str, archive: &[u8]) {
+        let file = format!("voxear-{version}-{name}.tar.zst");
+        let signature = self.key.sign(archive);
+        std::fs::write(self.dir.join(&file), archive).expect("the archive can be written");
+        write_signature(&self.dir.join(&file), &signature);
+        let module = Module {
+            name: name.to_owned(),
+            title: module_title(name),
+            url: file,
+            size: archive.len() as u64,
+            sha256: hex(&<sha2::Sha256 as sha2::Digest>::digest(archive)),
+            signature,
+        };
+        let release = self.release(version);
+        release.modules.retain(|existing| existing.name != name);
+        release.modules.push(module);
     }
 
     pub fn release(&mut self, version: &Version) -> &mut Release {

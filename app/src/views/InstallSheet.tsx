@@ -124,6 +124,9 @@ export function InstallSheet() {
 function ReleaseRow({ release }: { release: Release }) {
   const job = useStore((s) => s.jobs.find((j) => j.key === release.version && j.state !== 'failed'))
   const queueInstall = useStore((s) => s.queueInstall)
+  // Optional modules, such as the manual, come along unless they're unticked.
+  const [without, setWithout] = useState<string[]>([])
+  const offered = !release.installed && !release.needsNewerLauncher && release.modules.length > 0
   return (
     <div className="release">
       <div className="grow">
@@ -139,6 +142,26 @@ function ReleaseRow({ release }: { release: Release }) {
             </>
           )}
         </span>
+        {offered && (
+          <span className="module-options">
+            {release.modules.map((module) => (
+              <label key={module.name} className="check">
+                <input
+                  type="checkbox"
+                  checked={!without.includes(module.name)}
+                  disabled={Boolean(job)}
+                  onChange={(event) =>
+                    setWithout((current) =>
+                      event.target.checked ? current.filter((name) => name !== module.name) : [...current, module.name]
+                    )
+                  }
+                />
+                {module.title}
+                <span className="release-meta">{bytes(module.size)}</span>
+              </label>
+            ))}
+          </span>
+        )}
       </div>
       <div className="cell cell-action">
         {release.installed ? (
@@ -153,7 +176,7 @@ function ReleaseRow({ release }: { release: Release }) {
         ) : job ? (
           <span className="chip">{job.state === 'queued' ? 'Waiting' : 'Installing…'}</span>
         ) : (
-          <button className="btn btn-sm" onClick={() => queueInstall(release.version)}>
+          <button className="btn btn-sm" onClick={() => queueInstall(release.version, without)}>
             <Icon name="download" size={14} />
             Install
           </button>

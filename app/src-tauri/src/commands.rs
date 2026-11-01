@@ -11,11 +11,11 @@ use semver::Version;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Runtime, State};
 use tauri_plugin_updater::UpdaterExt;
-use voxear_launcher::manifest::SIGNATURE_SUFFIX;
+use voxear_launcher::manifest::{self, SIGNATURE_SUFFIX};
 use voxear_launcher::new_project::{self, NewProject, Offer};
 use voxear_launcher::{
-    Layout, Platform, Registry, Removed, Selector, Settings, Store, backup, fetch, launcher_version, project, releases,
-    self_update, upgrade,
+    InstallKind, Layout, Platform, Registry, Removed, Selector, Settings, Store, backup, fetch, launcher_version,
+    project, releases, self_update, upgrade,
 };
 
 use crate::dto::*;
@@ -97,7 +97,40 @@ pub async fn app_info(launcher: Shared<'_>) -> Reply<AppInfo> {
 
 #[tauri::command]
 pub async fn list_installs(launcher: Shared<'_>) -> Reply<Vec<InstallDto>> {
-    blocking(&launcher, |launcher| Ok(launcher.store().list()?.iter().map(InstallDto::from).collect())).await
+    blocking(&launcher, |launcher| {
+        // The saved release list says which modules each version offers, without going online.
+        let settings = launcher.settings()?;
+        let manifest = match settings.releases_url() {
+            Some(source) => releases::cached(&source, &settings.trusted_keys()?, &launcher.layout),
+            None => None,
+        };
+        let installs = launcher.store().list()?;
+        Ok(installs
+            .iter()
+            .map(|install| {
+                let release = manifest.as_ref().and_then(|manifest| manifest.find(&install.version));
+                let mut names: Vec<String> =
+                    release.map(|r| r.modules.iter().map(|m| m.name.clone()).collect()).unwrap_or_default();
+                if install.has_module(manifest::MANUAL) && !names.iter().any(|name| name == manifest::MANUAL) {
+                    names.push(manifest::MANUAL.to_owned());
+                }
+                let modules = names
+                    .into_iter()
+                    .map(|name| {
+                        let offered = release.and_then(|release| release.module(&name));
+                        InstallModuleDto {
+                            title: offered.map_or_else(|| manifest::module_title(&name), |module| module.title.clone()),
+                            installed: install.has_module(&name),
+                            available: offered.is_some() && install.kind == InstallKind::Managed,
+                            name,
+                        }
+                    })
+                    .collect();
+                InstallDto { modules, ..InstallDto::from(install) }
+            })
+            .collect())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -132,7 +165,14 @@ pub async fn list_releases(launcher: Shared<'_>) -> Reply<ReleasesDto> {
 
 /// Installs the release `version` from the manifest, sending progress as it goes.
 #[tauri::command]
-pub async fn install(launcher: Shared<'_>, version: String, on_progress: Channel<ProgressDto>) -> Reply<InstallDto> {
+pub async fn install(
+    launcher: Shared<'_>,
+    version: String,
+    without: Option<Vec<String>>,
+    on_progress: Channel<ProgressDto>,
+) -> Reply<InstallDto> {
+    // Leaving `without` out installs every module the release offers.
+    let without = without.unwrap_or_default();
     blocking(&launcher, move |launcher| {
         let settings = launcher.settings()?;
         let source = settings.releases_url().context("no release source is set; add one in Settings")?;
@@ -145,7 +185,7 @@ pub async fn install(launcher: Shared<'_>, version: String, on_progress: Channel
             .ok_or_else(|| anyhow!("Voxear {version} isn't in the release list"))?;
         let cancel = launcher.cancel_flag(&version);
         let mut progress = |step| _ = on_progress.send(ProgressDto::from(step));
-        let result = launcher.store().install(release, &loaded.url, &keys, &mut progress, &cancel);
+        let result = launcher.store().install_without(release, &loaded.url, &keys, &without, &mut progress, &cancel);
         launcher.forget_cancel_flag(&version);
         Ok(InstallDto::from(&result?))
     })
@@ -515,4 +555,39 @@ pub async fn install_launcher_update(
 #[tauri::command]
 pub fn restart_launcher<R: Runtime>(app: AppHandle<R>) {
     app.restart()
+}
+
+/// Adds an optional module, such as the manual, to one of the launcher's installs: downloaded and checked like the
+/// engine itself. Cancelled the same way as an install, under `<version>+<name>`.
+#[tauri::command]
+pub async fn add_module(
+    launcher: Shared<'_>,
+    version: String,
+    name: String,
+    on_progress: Channel<ProgressDto>,
+) -> Reply<()> {
+    blocking(&launcher, move |launcher| {
+        let settings = launcher.settings()?;
+        let source = settings.releases_url().context("no release source is set; add one in Settings")?;
+        let keys = settings.trusted_keys()?;
+        let loaded = releases::load(&source, &keys, &launcher.layout)?;
+        let parsed = Version::parse(&version)?;
+        let release = loaded
+            .manifest
+            .find(&parsed)
+            .ok_or_else(|| anyhow!("Voxear {version} isn't in the release list, so its {name} can't be found"))?;
+        let key = format!("{version}+{name}");
+        let cancel = launcher.cancel_flag(&key);
+        let mut progress = |step| _ = on_progress.send(ProgressDto::from(step));
+        let result = launcher.store().add_module(release, &name, &loaded.url, &keys, &mut progress, &cancel);
+        launcher.forget_cancel_flag(&key);
+        result.map(|_| ())
+    })
+    .await
+}
+
+/// Removes an optional module, such as the manual, from one of the launcher's installs.
+#[tauri::command]
+pub async fn remove_module(launcher: Shared<'_>, version: String, name: String) -> Reply<()> {
+    blocking(&launcher, move |launcher| launcher.store().remove_module(&Version::parse(&version)?, &name)).await
 }

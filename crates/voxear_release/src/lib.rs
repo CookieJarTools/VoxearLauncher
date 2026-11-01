@@ -22,7 +22,7 @@ use jiff::{SignedDuration, Timestamp};
 use semver::Version;
 use sha2::{Digest, Sha256};
 use voxear_launcher::engine::{ENGINE_FILE, EngineInfo};
-use voxear_launcher::manifest::{self, Download, Release, ReleaseManifest, SIGNATURE_SUFFIX};
+use voxear_launcher::manifest::{self, Download, Module, Release, ReleaseManifest, SIGNATURE_SUFFIX};
 use voxear_launcher::self_update::{self, PlatformUpdate, UpdateChannel, UpdateManifest};
 use voxear_launcher::store::hex;
 
@@ -160,6 +160,7 @@ pub fn add_engine(site: &Path, archive: &Path, key: &Key, details: &EngineReleas
                 min_launcher: None,
                 yanked: false,
                 downloads: Vec::new(),
+                modules: Vec::new(),
             });
             releases.releases.last_mut().expect("just pushed")
         }
@@ -176,6 +177,110 @@ pub fn add_engine(site: &Path, archive: &Path, key: &Key, details: &EngineReleas
     let release = release.clone();
     save_engine_manifest(site, releases, key)?;
     Ok(release)
+}
+
+/// What one archive given to `engine add` turned out to be.
+pub enum Added {
+    Engine(Release),
+    Module { version: Version, module: Module },
+}
+
+/// Adds engine archives and module archives together, as `voxear-dist` writes them: `voxear-<version>-<platform>
+/// .tar.zst` with an `engine.toml`, and modules such as `voxear-<version>-manual.tar.zst`. Engine archives go first,
+/// so a module always finds its release, whatever order the files came in.
+pub fn add_archives(site: &Path, archives: &[PathBuf], key: &Key, details: &EngineRelease) -> Result<Vec<Added>> {
+    let mut engines = Vec::new();
+    let mut modules = Vec::new();
+    for archive in archives {
+        if engine_info(archive).is_ok() {
+            engines.push(archive);
+        } else {
+            let (version, name) = module_of(archive).ok_or_else(|| {
+                anyhow!(
+                    "{} has no {ENGINE_FILE} and isn't named like a module (voxear-<version>-<module>.tar.zst)",
+                    archive.display()
+                )
+            })?;
+            modules.push((archive, version, name));
+        }
+    }
+    let mut added = Vec::new();
+    for archive in engines {
+        added.push(Added::Engine(add_engine(site, archive, key, details)?));
+    }
+    for (archive, version, name) in modules {
+        let module = add_module(site, archive, &version, &name, key, details)?;
+        added.push(Added::Module { version, module });
+    }
+    Ok(added)
+}
+
+/// Lists a module archive, such as the manual, on an engine release that is already in the manifest. Every entry
+/// must be inside the module's folder, which is where the launcher unpacks it.
+pub fn add_module(
+    site: &Path,
+    archive: &Path,
+    version: &Version,
+    name: &str,
+    key: &Key,
+    details: &EngineRelease,
+) -> Result<Module> {
+    ensure!(manifest::is_module_name(name), "`{name}` can't be a module's name");
+    check_module_entries(archive, name)?;
+    let mut releases = load_engine_manifest(site)?;
+    let release = releases.releases.iter_mut().find(|release| &release.version == version).ok_or_else(|| {
+        anyhow!(
+            "{} is a module of Voxear {version}, which isn't in the manifest yet; add its engine archive too",
+            archive.display()
+        )
+    })?;
+
+    let signature = key.sign_file(archive, version)?;
+    fs::write(signature_path(archive), &signature)?;
+    let bytes = fs::read(archive).with_context(|| format!("couldn't read {}", archive.display()))?;
+    let file = archive.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    let tag = details.tag.clone().unwrap_or_else(|| format!("engine-v{version}"));
+    let base = details.download_base.as_deref().unwrap_or(DOWNLOAD_BASE).trim_end_matches('/');
+    let module = Module {
+        name: name.to_owned(),
+        title: manifest::module_title(name),
+        url: format!("{base}/{tag}/{file}"),
+        size: bytes.len() as u64,
+        sha256: hex(&Sha256::digest(&bytes)),
+        signature,
+    };
+    release.modules.retain(|existing| existing.name != module.name);
+    release.modules.push(module.clone());
+    release.modules.sort_by(|a, b| a.name.cmp(&b.name));
+    save_engine_manifest(site, releases, key)?;
+    Ok(module)
+}
+
+/// The version and module name in a module archive's file name: `voxear-0.3.0-manual.tar.zst` is the manual of
+/// 0.3.0. The name is the last part, so versions with tags (`0.4.0-nightly.20261101`) read correctly.
+pub fn module_of(archive: &Path) -> Option<(Version, String)> {
+    let file = archive.file_name()?.to_str()?;
+    let middle = file.strip_prefix("voxear-")?.strip_suffix(".tar.zst")?;
+    let (version, name) = middle.rsplit_once('-')?;
+    let version = Version::parse(version).ok()?;
+    manifest::is_module_name(name).then(|| (version, name.to_owned()))
+}
+
+fn check_module_entries(archive: &Path, name: &str) -> Result<()> {
+    let file = File::open(archive).with_context(|| format!("couldn't open {}", archive.display()))?;
+    let mut tar = tar::Archive::new(zstd::Decoder::new(file).context("it isn't a .tar.zst")?);
+    for entry in tar.entries()? {
+        let entry = entry?;
+        let path = entry.path()?.into_owned();
+        let first = path.components().find(|part| !matches!(part, std::path::Component::CurDir));
+        ensure!(
+            first == Some(std::path::Component::Normal(name.as_ref())),
+            "{} holds {}, which isn't in its {name} folder",
+            archive.display(),
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 /// Marks a release as pulled, or puts it back: it stays installable by exact version, so pinned projects open.
@@ -498,6 +603,53 @@ mod tests {
         let path = add_launcher(&fixture.site, &bundle, &build, LauncherSignature::TauriSig(&sig)).unwrap();
         let manifest = UpdateManifest::parse(&fs::read_to_string(path).unwrap()).unwrap();
         assert!(manifest.platforms["linux-x86_64"].url.ends_with("/launcher-v0.2.0/Launcher.AppImage"));
+    }
+
+    #[test]
+    fn lists_the_manual_as_a_module_of_its_release() {
+        let fixture = Fixture::new();
+        let (key, made) = fixture.key("engine", false);
+        let version = Version::parse("0.4.0-nightly.20261101").unwrap();
+        let engine = fixture.archive("0.4.0-nightly.20261101", Channel::Nightly);
+        let manual = fixture.dir.path().join("build").join("voxear-0.4.0-nightly.20261101-manual.tar.zst");
+        fs::write(&manual, voxear_launcher::testing::manual_archive(&version)).unwrap();
+        assert_eq!(module_of(&manual), Some((version.clone(), "manual".to_owned())));
+
+        // The manual first, as a glob might give it: the engine archive is still listed before it.
+        let added = add_archives(&fixture.site, &[manual.clone(), engine], &key, &fixture.local()).unwrap();
+        assert!(matches!(added[0], Added::Engine(_)));
+        assert!(
+            matches!(&added[1], Added::Module { module, .. } if module.name == "manual" && module.title == "Voxear Manual")
+        );
+        assert!(signature_path(&manual).is_file());
+
+        // The launcher installs the engine with its manual, checking both.
+        let mut keys = TrustedKeys::new();
+        keys.add(&made.public_line).unwrap();
+        let layout = Layout::new(fixture.dir.path().join("home"));
+        let url = engine_manifest_path(&fixture.site).to_string_lossy().into_owned();
+        let loaded = releases::load(&url, &keys, &layout).unwrap();
+        let store = Store::new(layout, Platform::current().unwrap());
+        let release = loaded.manifest.find(&version).unwrap();
+        let install = store.install(release, &loaded.url, &keys, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+        assert!(install.has_module("manual"));
+    }
+
+    #[test]
+    fn refuses_a_module_without_its_release_or_outside_its_folder() {
+        let fixture = Fixture::new();
+        let (key, _) = fixture.key("engine", false);
+        let lonely = fixture.dir.path().join("voxear-9.9.9-manual.tar.zst");
+        fs::write(&lonely, voxear_launcher::testing::manual_archive(&Version::new(9, 9, 9))).unwrap();
+        let error = add_archives(&fixture.site, &[lonely], &key, &fixture.local()).err().unwrap();
+        assert!(error.to_string().contains("isn't in the manifest yet"), "{error}");
+
+        add_engine(&fixture.site, &fixture.archive("0.3.0", Channel::Stable), &key, &fixture.local()).unwrap();
+        let sneaky = fixture.dir.path().join("voxear-0.3.0-manual.tar.zst");
+        let entries = [voxear_launcher::testing::ArchiveEntry::file("bin/vox", b"x", 0o755)];
+        fs::write(&sneaky, voxear_launcher::testing::tar_zst(&entries)).unwrap();
+        let error = add_archives(&fixture.site, &[sneaky], &key, &fixture.local()).err().unwrap();
+        assert!(error.to_string().contains("isn't in its manual folder"), "{error}");
     }
 
     #[test]

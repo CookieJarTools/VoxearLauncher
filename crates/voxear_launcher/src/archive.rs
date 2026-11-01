@@ -15,7 +15,18 @@ pub fn unpack(archive: &Path, dest: &Path, progress: &mut dyn FnMut(u64)) -> Res
     unpack_reader(file, dest, progress)
 }
 
+/// Unpacks a module's archive into `dest`. Every entry must be inside the module's own folder, `<name>/`, so a
+/// module can never change the engine's files.
+pub fn unpack_module(archive: &Path, dest: &Path, name: &str, progress: &mut dyn FnMut(u64)) -> Result<()> {
+    let file = File::open(archive).with_context(|| format!("couldn't open {}", archive.display()))?;
+    unpack_entries(file, dest, Some(name), progress)
+}
+
 pub fn unpack_reader(reader: impl Read, dest: &Path, progress: &mut dyn FnMut(u64)) -> Result<()> {
+    unpack_entries(reader, dest, None, progress)
+}
+
+fn unpack_entries(reader: impl Read, dest: &Path, only_in: Option<&str>, progress: &mut dyn FnMut(u64)) -> Result<()> {
     std::fs::create_dir_all(dest).with_context(|| format!("couldn't create {}", dest.display()))?;
     let consumed = Rc::new(Cell::new(0));
     let counted = Counted { inner: reader, consumed: consumed.clone() };
@@ -32,6 +43,11 @@ pub fn unpack_reader(reader: impl Read, dest: &Path, progress: &mut dyn FnMut(u6
         if !kind.is_file() && !kind.is_dir() {
             bail!("the engine archive holds {} as a {kind:?}; only files and folders are allowed", path.display());
         }
+        if let Some(folder) = only_in
+            && first_folder(&path) != Some(folder)
+        {
+            bail!("the {folder} archive holds {}, which isn't in its {folder} folder", path.display());
+        }
         if !stays_inside(&path)
             || !entry.unpack_in(dest).with_context(|| format!("couldn't unpack {}", path.display()))?
         {
@@ -40,6 +56,13 @@ pub fn unpack_reader(reader: impl Read, dest: &Path, progress: &mut dyn FnMut(u6
         progress(consumed.get());
     }
     Ok(())
+}
+
+fn first_folder(path: &Path) -> Option<&str> {
+    match path.components().find(|part| !matches!(part, Component::CurDir))? {
+        Component::Normal(name) => name.to_str(),
+        _ => None,
+    }
 }
 
 fn stays_inside(path: &Path) -> bool {
@@ -96,6 +119,22 @@ mod tests {
         let archive = tar_zst(&[ArchiveEntry::file("../escaped", b"x", 0o644)]);
         assert!(unpack_reader(archive.as_slice(), &inner, &mut |_| {}).is_err());
         assert!(!dir.path().join("escaped").exists());
+    }
+
+    #[test]
+    fn keeps_a_module_inside_its_own_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let manual = tar_zst(&[ArchiveEntry::dir("manual"), ArchiveEntry::file("manual/index.md", b"# Voxear", 0o644)]);
+        let path = dir.path().join("manual.tar.zst");
+        std::fs::write(&path, &manual).unwrap();
+        unpack_module(&path, &dir.path().join("install"), "manual", &mut |_| {}).unwrap();
+        assert!(dir.path().join("install/manual/index.md").is_file());
+
+        let sneaky =
+            tar_zst(&[ArchiveEntry::file("manual/index.md", b"x", 0o644), ArchiveEntry::file("bin/vox", b"x", 0o755)]);
+        std::fs::write(&path, &sneaky).unwrap();
+        let error = unpack_module(&path, &dir.path().join("other"), "manual", &mut |_| {}).unwrap_err();
+        assert!(error.to_string().contains("isn't in its manual folder"), "{error}");
     }
 
     #[test]

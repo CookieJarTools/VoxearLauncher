@@ -7,13 +7,19 @@ export type View = 'projects' | 'installs' | 'settings'
 
 /** An install waiting or running. Installs run one at a time, as the core's lock requires. */
 export interface Job {
-  /** The version to install, or the archive's path. */
+  /** The version to install, the archive's path, or `<version>+<module>`. */
   key: string
   label: string
-  kind: 'release' | 'file'
+  kind: 'release' | 'file' | 'module'
   state: 'queued' | 'running' | 'failed'
   progress: Progress | null
   error?: string
+  /** For a release: the optional modules to leave out. */
+  without?: string[]
+  /** For a module: which version it goes into, which module, and what it's called. */
+  version?: string
+  module?: string
+  title?: string
 }
 
 export interface Toast {
@@ -68,7 +74,9 @@ interface State {
   init(): Promise<void>
   refresh(): Promise<void>
   loadReleases(): Promise<void>
-  queueInstall(version: string): void
+  queueInstall(version: string, without?: string[]): void
+  queueModule(version: string, name: string, title: string): void
+  retryJob(key: string): void
   queueFile(path: string): void
   cancelJob(key: string): void
   dismissJob(key: string): void
@@ -101,12 +109,19 @@ export const useStore = create<State>((set, get) => {
     update({ state: 'running', progress: null })
     const onProgress = (progress: Progress) => update({ progress })
     try {
-      const install = job.kind === 'release' ? await api.install(job.key, onProgress) : await api.installFile(job.key, onProgress)
-      set((state) => ({ jobs: state.jobs.filter((j) => j.key !== job.key) }))
-      get().toast('ok', `Installed Voxear ${install.version}`, {
-        label: 'New project',
-        run: () => get().openNewProject(install.version)
-      })
+      if (job.kind === 'module') {
+        await api.addModule(job.version!, job.module!, onProgress)
+        set((state) => ({ jobs: state.jobs.filter((j) => j.key !== job.key) }))
+        get().toast('ok', `Added the ${job.title} to Voxear ${job.version}`)
+      } else {
+        const install =
+          job.kind === 'release' ? await api.install(job.key, job.without ?? [], onProgress) : await api.installFile(job.key, onProgress)
+        set((state) => ({ jobs: state.jobs.filter((j) => j.key !== job.key) }))
+        get().toast('ok', `Installed Voxear ${install.version}`, {
+          label: 'New project',
+          run: () => get().openNewProject(install.version)
+        })
+      }
       void get().refresh()
       void get().loadReleases()
     } catch (error) {
@@ -186,8 +201,25 @@ export const useStore = create<State>((set, get) => {
       }
     },
 
-    queueInstall: (version) =>
-      enqueue({ key: version, label: `Voxear ${version}`, kind: 'release', state: 'queued', progress: null }),
+    queueInstall: (version, without = []) =>
+      enqueue({ key: version, label: `Voxear ${version}`, kind: 'release', state: 'queued', progress: null, without }),
+
+    queueModule: (version, name, title) =>
+      enqueue({
+        key: `${version}+${name}`,
+        label: `the ${title} for Voxear ${version}`,
+        kind: 'module',
+        state: 'queued',
+        progress: null,
+        version,
+        module: name,
+        title
+      }),
+
+    retryJob: (key) => {
+      const job = get().jobs.find((j) => j.key === key)
+      if (job) enqueue({ ...job, state: 'queued', progress: null, error: undefined })
+    },
 
     queueFile: (path) => {
       const name = path.split(/[\\/]/).pop() ?? path

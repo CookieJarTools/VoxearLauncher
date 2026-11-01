@@ -242,3 +242,39 @@ fn says_why_a_development_build_cannot_update_itself() {
     let error = fixture.call("install_launcher_update", json!({ "onProgress": channel(4) })).unwrap_err();
     assert!(error["message"].as_str().unwrap().contains("check for updates first"), "{error}");
 }
+
+/// The manual as an optional part of an install, through IPC: offered with its size, left out when asked, added
+/// later, listed, and removed.
+#[test]
+fn installs_adds_and_removes_the_manual() {
+    let mut fixture = Fixture::new();
+    fixture.fake.add_manual("0.2.0");
+    fixture.fake.write();
+    fixture.trust_the_fake_releases();
+
+    let releases = fixture.ok("list_releases", json!({}));
+    let newest = &releases["releases"][0];
+    assert_eq!(newest["version"], "0.2.0");
+    assert_eq!(newest["modules"][0]["name"], "manual");
+    assert_eq!(newest["modules"][0]["title"], "Voxear Manual");
+    assert!(newest["modules"][0]["size"].as_u64().unwrap() > 0);
+    assert_eq!(releases["releases"][1]["modules"], json!([]), "0.1.0 has no modules");
+
+    fixture.ok("install", json!({ "version": "0.2.0", "without": ["manual"], "onProgress": channel(1) }));
+    let manual = |fixture: &Fixture| fixture.ok("list_installs", json!({}))[0]["modules"][0].clone();
+    assert_eq!(
+        manual(&fixture),
+        json!({ "name": "manual", "title": "Voxear Manual", "installed": false, "available": true })
+    );
+
+    fixture.ok("add_module", json!({ "version": "0.2.0", "name": "manual", "onProgress": channel(2) }));
+    assert_eq!(manual(&fixture)["installed"], true);
+
+    fixture.ok("remove_module", json!({ "version": "0.2.0", "name": "manual" }));
+    assert_eq!(manual(&fixture)["installed"], false);
+
+    fixture.ok("uninstall", json!({ "version": "0.2.0" }));
+    let install = fixture.ok("install", json!({ "version": "0.2.0", "without": [], "onProgress": channel(1) }));
+    assert_eq!(install["version"], "0.2.0");
+    assert_eq!(manual(&fixture)["installed"], true, "installed with the engine by default");
+}

@@ -24,7 +24,7 @@ use crate::engine::{self, EngineInfo};
 use crate::fetch;
 use crate::fsutil::{self, TempDir};
 use crate::layout::Layout;
-use crate::manifest::Release;
+use crate::manifest::{self, Module, Release};
 use crate::platform::Platform;
 use crate::signing::TrustedKeys;
 
@@ -61,6 +61,11 @@ impl Install {
 
     pub fn editor(&self) -> PathBuf {
         engine::editor(&self.path)
+    }
+
+    /// Whether an optional module, such as the manual, is in this install.
+    pub fn has_module(&self, name: &str) -> bool {
+        self.path.join(name).is_dir()
     }
 }
 
@@ -170,13 +175,28 @@ impl Store {
         self.pick(&Selector::Latest(Channel::Stable))
     }
 
-    /// Downloads, verifies and installs a release from a manifest. `manifest_url` is where the manifest came
-    /// from, which download URLs may be relative to.
+    /// Downloads, verifies and installs a release from a manifest, with all of its optional modules. `manifest_url`
+    /// is where the manifest came from, which download URLs may be relative to.
     pub fn install(
         &self,
         release: &Release,
         manifest_url: &str,
         keys: &TrustedKeys,
+        progress: &mut dyn FnMut(Progress),
+        cancel: &AtomicBool,
+    ) -> Result<Install> {
+        self.install_without(release, manifest_url, keys, &[], progress, cancel)
+    }
+
+    /// Installs a release with its optional modules except those named in `without`. The engine and each module
+    /// are downloaded and checked against the manifest and their signatures before any of them is unpacked, and
+    /// the install appears in one step, modules and all.
+    pub fn install_without(
+        &self,
+        release: &Release,
+        manifest_url: &str,
+        keys: &TrustedKeys,
+        without: &[String],
         progress: &mut dyn FnMut(Progress),
         cancel: &AtomicBool,
     ) -> Result<Install> {
@@ -191,23 +211,122 @@ impl Store {
         let download = release
             .download(self.platform)
             .ok_or_else(|| anyhow!("Voxear {version} has no download for {}", self.platform))?;
-        let url = fetch::resolve(manifest_url, &download.url);
-        let part = self.layout.downloads().join(format!("voxear-{version}-{}.tar.zst.part", self.platform));
+        let modules: Vec<&Module> = release.modules.iter().filter(|module| !without.contains(&module.name)).collect();
+        let total = download.size + modules.iter().map(|module| module.size).sum::<u64>();
+
+        let engine = Part {
+            what: format!("Voxear {version}"),
+            url: fetch::resolve(manifest_url, &download.url),
+            file: self.layout.downloads().join(format!("voxear-{version}-{}.tar.zst.part", self.platform)),
+            size: download.size,
+            sha256: &download.sha256,
+            signature: &download.signature,
+        };
+        let module_parts: Vec<(&Module, Part)> = modules
+            .iter()
+            .map(|module| {
+                let part = Part {
+                    what: format!("the {} for Voxear {version}", module.title),
+                    url: fetch::resolve(manifest_url, &module.url),
+                    file: self.layout.downloads().join(format!("voxear-{version}-{}.tar.zst.part", module.name)),
+                    size: module.size,
+                    sha256: &module.sha256,
+                    signature: &module.signature,
+                };
+                (*module, part)
+            })
+            .collect();
 
         let result = (|| {
-            let sha256 = download_to(&url, &part, download.size, progress, cancel)?;
-            ensure!(
-                sha256.eq_ignore_ascii_case(&download.sha256),
-                "the download of Voxear {version} is corrupt (its SHA-256 doesn't match the manifest), so it was \
-                 thrown away"
-            );
-            progress(Progress::Verifying);
-            keys.verify_file(&part, &download.signature)
-                .with_context(|| format!("the download of Voxear {version} failed its signature check"))?;
-            self.unpack_and_commit(&part, Some((version, release.channel)), url.clone(), sha256, progress)
+            let mut done = 0;
+            let sha256 = engine.fetch(keys, done, total, progress, cancel)?;
+            done += engine.size;
+            for (_, part) in &module_parts {
+                part.fetch(keys, done, total, progress, cancel)?;
+                done += part.size;
+            }
+            let modules: Vec<(&Module, &Path)> =
+                module_parts.iter().map(|(module, part)| (*module, part.file.as_path())).collect();
+            self.unpack_and_commit(
+                &engine.file,
+                Some((version, release.channel)),
+                engine.url.clone(),
+                sha256,
+                &modules,
+                progress,
+            )
         })();
-        _ = fs::remove_file(&part);
+        _ = fs::remove_file(&engine.file);
+        for (_, part) in &module_parts {
+            _ = fs::remove_file(&part.file);
+        }
         result
+    }
+
+    /// Adds one of a release's optional modules to its install, checked the same way as the engine. Only the
+    /// launcher's own installs can change: a located engine's files are left alone.
+    pub fn add_module(
+        &self,
+        release: &Release,
+        name: &str,
+        manifest_url: &str,
+        keys: &TrustedKeys,
+        progress: &mut dyn FnMut(Progress),
+        cancel: &AtomicBool,
+    ) -> Result<Install> {
+        let _lock = self.lock()?;
+        self.clear_leftovers();
+        let version = &release.version;
+        let install = self.managed_install_of(version)?;
+        let module =
+            release.module(name).ok_or_else(|| anyhow!("Voxear {version} has no {}", manifest::module_title(name)))?;
+        let target = install.path.join(&module.name);
+        ensure!(!target.exists(), "Voxear {version} already has the {}", module.title);
+
+        let part = Part {
+            what: format!("the {} for Voxear {version}", module.title),
+            url: fetch::resolve(manifest_url, &module.url),
+            file: self.layout.downloads().join(format!("voxear-{version}-{}.tar.zst.part", module.name)),
+            size: module.size,
+            sha256: &module.sha256,
+            signature: &module.signature,
+        };
+        let result = (|| {
+            part.fetch(keys, 0, part.size, progress, cancel)?;
+            let staging = TempDir::create(self.layout.staging().join(fsutil::unique_suffix()))?;
+            progress(Progress::Unpacking { done: 0, total: part.size });
+            archive::unpack_module(&part.file, staging.path(), &module.name, &mut |done| {
+                progress(Progress::Unpacking { done, total: part.size })
+            })?;
+            progress(Progress::Finishing);
+            fs::rename(staging.path().join(&module.name), &target)
+                .with_context(|| format!("couldn't move the {} into {}", module.title, target.display()))
+        })();
+        _ = fs::remove_file(&part.file);
+        result?;
+        Ok(install)
+    }
+
+    /// Removes an optional module, such as the manual, from one of the launcher's installs.
+    pub fn remove_module(&self, version: &Version, name: &str) -> Result<()> {
+        let _lock = self.lock()?;
+        ensure!(manifest::is_module_name(name), "`{name}` isn't a module");
+        let install = self.managed_install_of(version)?;
+        let title = manifest::module_title(name);
+        ensure!(install.has_module(name), "Voxear {version} doesn't have the {title}");
+        self.move_to_trash(&install.path.join(name))
+            .with_context(|| format!("couldn't remove the {title}; close the editor and try again"))?;
+        self.empty_trash();
+        Ok(())
+    }
+
+    fn managed_install_of(&self, version: &Version) -> Result<Install> {
+        let install = self.get(version)?.ok_or_else(|| anyhow!("Voxear {version} isn't installed"))?;
+        ensure!(
+            install.kind == InstallKind::Managed,
+            "Voxear {version} was located, not installed by the launcher, so its files are left as they are"
+        );
+        Ok(install)
     }
 
     /// Installs an engine archive from disk, for offline machines. `signature` is the contents of its
@@ -225,7 +344,7 @@ impl Store {
         keys.verify_file(archive, signature)
             .with_context(|| format!("{} failed its signature check", archive.display()))?;
         let source = fsutil::absolute(archive)?.to_string_lossy().into_owned();
-        self.unpack_and_commit(archive, None, source, sha256_file(archive)?, progress)
+        self.unpack_and_commit(archive, None, source, sha256_file(archive)?, &[], progress)
     }
 
     /// Records an engine that lives somewhere else, such as one built from source. Its files are never
@@ -285,9 +404,12 @@ impl Store {
         expected: Option<(&Version, Channel)>,
         source: String,
         sha256: String,
+        modules: &[(&Module, &Path)],
         progress: &mut dyn FnMut(Progress),
     ) -> Result<Install> {
-        let total = fs::metadata(archive_path).map(|meta| meta.len()).unwrap_or_default();
+        let size = |path: &Path| fs::metadata(path).map(|meta| meta.len()).unwrap_or_default();
+        let engine_size = size(archive_path);
+        let total = engine_size + modules.iter().map(|(_, path)| size(path)).sum::<u64>();
         let staging = TempDir::create(self.layout.staging().join(fsutil::unique_suffix()))?;
         progress(Progress::Unpacking { done: 0, total });
         archive::unpack(archive_path, staging.path(), &mut |done| progress(Progress::Unpacking { done, total }))?;
@@ -309,6 +431,17 @@ impl Store {
             None => self.ensure_not_installed(&info.version)?,
         }
         ensure!(engine::vox(staging.path()).is_file(), "the archive for Voxear {} has no `vox`", info.version);
+
+        let mut done = engine_size;
+        for (module, path) in modules {
+            // An engine archive from before modules existed may carry the manual itself.
+            if !staging.path().join(&module.name).exists() {
+                archive::unpack_module(path, staging.path(), &module.name, &mut |read| {
+                    progress(Progress::Unpacking { done: done + read, total })
+                })?;
+            }
+            done += size(path);
+        }
 
         progress(Progress::Finishing);
         let receipt = Receipt {
@@ -463,6 +596,46 @@ fn managed_install(receipt: Receipt, path: PathBuf) -> Install {
     }
 }
 
+/// One file of an install, as the manifest describes it.
+struct Part<'a> {
+    /// What it is, for messages: "Voxear 0.3.0", or "the Voxear Manual for Voxear 0.3.0".
+    what: String,
+    url: String,
+    /// Where it downloads to.
+    file: PathBuf,
+    size: u64,
+    sha256: &'a str,
+    signature: &'a str,
+}
+
+impl Part<'_> {
+    /// Downloads the file and checks its size, SHA-256 and signature. Progress counts from `offset` towards
+    /// `total`, so an engine and its modules fill one bar. Returns the SHA-256.
+    fn fetch(
+        &self,
+        keys: &TrustedKeys,
+        offset: u64,
+        total: u64,
+        progress: &mut dyn FnMut(Progress),
+        cancel: &AtomicBool,
+    ) -> Result<String> {
+        let mut report = |step| match step {
+            Progress::Downloading { done, .. } => progress(Progress::Downloading { done: offset + done, total }),
+            other => progress(other),
+        };
+        let sha256 = download_to(&self.url, &self.file, self.size, &mut report, cancel)?;
+        ensure!(
+            sha256.eq_ignore_ascii_case(self.sha256),
+            "the download of {} is corrupt (its SHA-256 doesn't match the manifest), so it was thrown away",
+            self.what
+        );
+        progress(Progress::Verifying);
+        keys.verify_file(&self.file, self.signature)
+            .with_context(|| format!("the download of {} failed its signature check", self.what))?;
+        Ok(sha256)
+    }
+}
+
 /// Streams `url` to `part`, refusing more bytes than the manifest promised, and returns its SHA-256.
 fn download_to(
     url: &str,
@@ -524,7 +697,8 @@ pub fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{FakeReleases, TestKey, engine_archive};
+    use crate::manifest::MANUAL;
+    use crate::testing::{ArchiveEntry, FakeReleases, TestKey, engine_archive, tar_zst};
 
     struct Fixture {
         _dir: tempfile::TempDir,
@@ -548,6 +722,21 @@ mod tests {
             let url = self.fake.write();
             let release = self.fake.manifest.find(&v(version)).unwrap();
             self.store.install(release, &url, &self.fake.trusted_keys(), progress, &AtomicBool::new(false))
+        }
+
+        fn install_without(&self, version: &str, without: &[&str]) -> Result<Install> {
+            let url = self.fake.write();
+            let release = self.fake.manifest.find(&v(version)).unwrap();
+            let without: Vec<String> = without.iter().map(|name| (*name).to_owned()).collect();
+            let keys = self.fake.trusted_keys();
+            self.store.install_without(release, &url, &keys, &without, &mut |_| {}, &AtomicBool::new(false))
+        }
+
+        fn add_manual_later(&self, version: &str) -> Result<Install> {
+            let url = self.fake.write();
+            let release = self.fake.manifest.find(&v(version)).unwrap();
+            let keys = self.fake.trusted_keys();
+            self.store.add_module(release, MANUAL, &url, &keys, &mut |_| {}, &AtomicBool::new(false))
         }
 
         fn download(&mut self, version: &str) -> &mut crate::manifest::Download {
@@ -649,6 +838,97 @@ mod tests {
         fixture.install("0.3.0").unwrap();
         assert_eq!(fs::read_dir(layout.staging()).unwrap().count(), 0);
         assert_eq!(fs::read_dir(layout.downloads()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn installs_the_manual_with_the_engine() {
+        let mut fixture = Fixture::new();
+        fixture.fake.add("0.3.0", Channel::Stable);
+        fixture.fake.add_manual("0.3.0");
+        let mut steps = Vec::new();
+        let install = fixture.install_reporting("0.3.0", &mut |step| steps.push(step)).unwrap();
+        assert!(install.has_module(MANUAL));
+        assert!(install.path.join("manual/index.md").is_file());
+        assert!(install.vox().is_file());
+
+        // One bar for the engine and its manual together.
+        let release = fixture.fake.manifest.find(&v("0.3.0")).unwrap();
+        let total = release.download(platform()).unwrap().size + release.module(MANUAL).unwrap().size;
+        let downloads: Vec<_> = steps
+            .iter()
+            .filter_map(|step| match step {
+                Progress::Downloading { done, total } => Some((*done, *total)),
+                _ => None,
+            })
+            .collect();
+        assert!(downloads.iter().all(|(_, t)| *t == total));
+        assert_eq!(downloads.last().unwrap().0, total);
+        assert_eq!(fs::read_dir(fixture.store.layout().downloads()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn installs_without_the_manual_when_asked() {
+        let mut fixture = Fixture::new();
+        fixture.fake.add("0.3.0", Channel::Stable);
+        fixture.fake.add_manual("0.3.0");
+        let install = fixture.install_without("0.3.0", &[MANUAL]).unwrap();
+        assert!(!install.has_module(MANUAL));
+        assert!(install.vox().is_file());
+    }
+
+    #[test]
+    fn adds_and_removes_the_manual_later() {
+        let mut fixture = Fixture::new();
+        fixture.fake.add("0.3.0", Channel::Stable);
+        fixture.fake.add_manual("0.3.0");
+        let install = fixture.install_without("0.3.0", &[MANUAL]).unwrap();
+
+        fixture.add_manual_later("0.3.0").unwrap();
+        assert!(install.has_module(MANUAL));
+        assert!(error_text(fixture.add_manual_later("0.3.0")).contains("already has the Voxear Manual"));
+
+        fixture.store.remove_module(&v("0.3.0"), MANUAL).unwrap();
+        assert!(!install.has_module(MANUAL));
+        assert!(install.vox().is_file(), "the engine stays");
+        assert!(fixture.store.remove_module(&v("0.3.0"), MANUAL).is_err());
+        assert!(fixture.store.remove_module(&v("0.3.0"), "bin").is_err(), "only modules can be removed");
+    }
+
+    #[test]
+    fn leaves_a_located_engines_files_alone() {
+        let mut fixture = Fixture::new();
+        let dir = fixture.fake.dir.join("built-from-source");
+        let archive = engine_archive(&v("0.3.0"), Channel::Stable, platform());
+        archive::unpack_reader(archive.as_slice(), &dir, &mut |_| {}).unwrap();
+        fixture.store.locate(&dir).unwrap();
+        fixture.fake.add("0.3.0", Channel::Stable);
+        fixture.fake.add_manual("0.3.0");
+        assert!(error_text(fixture.add_manual_later("0.3.0")).contains("left as they are"));
+        assert!(!dir.join(MANUAL).exists());
+    }
+
+    #[test]
+    fn refuses_a_manual_that_fails_its_checks() {
+        let mut fixture = Fixture::new();
+        fixture.fake.add("0.3.0", Channel::Stable);
+        fixture.fake.add_manual("0.3.0");
+        let manual = fs::read(fixture.fake.dir.join("voxear-0.3.0-manual.tar.zst")).unwrap();
+        fixture.fake.release(&v("0.3.0")).modules[0].signature = TestKey::generate().sign(&manual);
+        assert!(
+            error_text(fixture.install("0.3.0")).contains("Voxear Manual for Voxear 0.3.0 failed its signature check")
+        );
+        fixture.assert_nothing_left_behind();
+    }
+
+    #[test]
+    fn refuses_a_manual_that_would_change_engine_files() {
+        let mut fixture = Fixture::new();
+        fixture.fake.add("0.3.0", Channel::Stable);
+        let sneaky =
+            tar_zst(&[ArchiveEntry::file("manual/index.md", b"x", 0o644), ArchiveEntry::file("bin/vox", b"x", 0o755)]);
+        fixture.fake.add_module(&v("0.3.0"), MANUAL, &sneaky);
+        assert!(error_text(fixture.install("0.3.0")).contains("isn't in its manual folder"));
+        fixture.assert_nothing_left_behind();
     }
 
     #[test]

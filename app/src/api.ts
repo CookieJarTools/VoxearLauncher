@@ -25,6 +25,23 @@ export interface Install {
   located: boolean
   missing: boolean
   installed: string | null
+  /** Optional parts, such as the manual: what's in the install, and what its release offers. */
+  modules: InstallModule[]
+}
+
+export interface InstallModule {
+  name: string
+  title: string
+  installed: boolean
+  /** The release offers it, so it can be added. */
+  available: boolean
+}
+
+/** An optional part of a release, such as the manual. */
+export interface Module {
+  name: string
+  title: string
+  size: number
 }
 
 export interface Release {
@@ -35,6 +52,7 @@ export interface Release {
   size: number
   installed: boolean
   needsNewerLauncher: boolean
+  modules: Module[]
 }
 
 export interface Releases {
@@ -168,7 +186,9 @@ export interface Api {
   appInfo(): Promise<AppInfo>
   listInstalls(): Promise<Install[]>
   listReleases(): Promise<Releases>
-  install(version: string, onProgress: (progress: Progress) => void): Promise<Install>
+  install(version: string, without: string[], onProgress: (progress: Progress) => void): Promise<Install>
+  addModule(version: string, name: string, onProgress: (progress: Progress) => void): Promise<void>
+  removeModule(version: string, name: string): Promise<void>
   cancelInstall(version: string): Promise<void>
   installFile(path: string, onProgress: (progress: Progress) => void): Promise<Install>
   locate(path: string): Promise<Install>
@@ -213,7 +233,9 @@ const tauriApi: Api = {
   appInfo: () => invoke('app_info'),
   listInstalls: () => invoke('list_installs'),
   listReleases: () => invoke('list_releases'),
-  install: (version, onProgress) => invoke('install', { version, onProgress: channel(onProgress) }),
+  install: (version, without, onProgress) => invoke('install', { version, without, onProgress: channel(onProgress) }),
+  addModule: (version, name, onProgress) => invoke('add_module', { version, name, onProgress: channel(onProgress) }),
+  removeModule: (version, name) => invoke('remove_module', { version, name }),
   cancelInstall: (version) => invoke('cancel_install', { version }),
   installFile: (path, onProgress) => invoke('install_file', { path, onProgress: channel(onProgress) }),
   locate: (path) => invoke('locate', { path }),

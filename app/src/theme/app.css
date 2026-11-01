@@ -1305,6 +1305,34 @@ select.input option {
   display: grid;
 }
 
+.module-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 4px;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.check input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.check .release-meta {
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---------- Settings ---------- */
 
 .settings {

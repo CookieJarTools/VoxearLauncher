@@ -21,6 +21,7 @@ fn main() -> Result<()> {
         ("0.3.0-nightly.20261030", Channel::Nightly),
     ] {
         releases.add(version, channel);
+        releases.add_manual(version);
     }
     let manifest = releases.write();
     println!("Wrote fake releases to {}", dir.display());

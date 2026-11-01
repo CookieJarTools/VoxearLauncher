@@ -8,7 +8,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use semver::Version;
 use voxear_launcher::self_update::UpdateChannel;
-use voxear_release::{EngineRelease, Key, LauncherBuild, LauncherSignature, signature_path};
+use voxear_release::{Added, EngineRelease, Key, LauncherBuild, LauncherSignature, signature_path};
 
 #[derive(Parser)]
 #[command(name = "voxear-release", version, about = "Sign Voxear releases and write the manifests the launcher reads")]
@@ -37,7 +37,7 @@ enum Command {
 #[derive(Subcommand)]
 enum EngineCommand {
     /// Sign engine archives and list them in the release manifest. Each archive's engine.toml says its version,
-    /// channel and platform.
+    /// channel and platform; a module archive, such as voxear-<version>-manual.tar.zst, is listed on its version.
     Add {
         #[arg(required = true)]
         archives: Vec<PathBuf>,
@@ -147,9 +147,13 @@ fn run(cli: Cli) -> Result<()> {
         Command::Engine(EngineCommand::Add { archives, site, tag, download_base, notes, min_launcher }) => {
             let key = site.key()?;
             let details = EngineRelease { tag, download_base, notes, min_launcher };
+            for added in voxear_release::add_archives(&site.site, &archives, &key, &details)? {
+                match added {
+                    Added::Engine(release) => println!("Listed Voxear {} ({})", release.version, release.channel),
+                    Added::Module { version, module } => println!("Listed the {} for Voxear {version}", module.title),
+                }
+            }
             for archive in &archives {
-                let release = voxear_release::add_engine(&site.site, archive, &key, &details)?;
-                println!("Listed Voxear {} ({}) from {}", release.version, release.channel, archive.display());
                 println!("  upload {} and {}", archive.display(), signature_path(archive).display());
             }
             println!(

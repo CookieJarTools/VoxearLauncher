@@ -88,7 +88,7 @@ function useSizes(installs: Install[]): Record<string, number> {
 function JobCard({ job }: { job: Job }) {
   const cancelJob = useStore((s) => s.cancelJob)
   const dismissJob = useStore((s) => s.dismissJob)
-  const queueAgain = useStore((s) => (job.kind === 'release' ? s.queueInstall : s.queueFile))
+  const retryJob = useStore((s) => s.retryJob)
   return (
     <div className="job">
       <div className="engine-icon">
@@ -101,7 +101,7 @@ function JobCard({ job }: { job: Job }) {
       <div className="row-actions compact" style={{ opacity: 1 }}>
         {job.state === 'failed' ? (
           <>
-            <button className="btn btn-sm" onClick={() => queueAgain(job.key)}>
+            <button className="btn btn-sm" onClick={() => retryJob(job.key)}>
               Try again
             </button>
             <button className="icon-btn" title="Dismiss" onClick={() => dismissJob(job.key)}>
@@ -126,6 +126,7 @@ function InstallRow({ install, index, size, home }: { install: Install; index: n
   const menu: MenuEntry[] = [
     { label: 'New project with this version', icon: 'plus', run: () => store().openNewProject(install.version) },
     { label: 'Show in files', icon: 'folder', run: () => void reveal(install.path) },
+    ...moduleEntries(install),
     'divider',
     install.located
       ? { label: 'Forget', icon: 'close', danger: true, run: () => void uninstall(install) }
@@ -146,7 +147,17 @@ function InstallRow({ install, index, size, home }: { install: Install; index: n
         <ChannelBadge channel={install.channel} />
       </div>
       <div className="cell cell-tag">
-        {install.missing ? <span className="chip chip-warn">Folder not found</span> : install.located && <span className="tag">Located</span>}
+        {install.missing ? (
+          <span className="chip chip-warn">Folder not found</span>
+        ) : install.located ? (
+          <span className="tag">Located</span>
+        ) : (
+          install.modules.some((module) => module.name === 'manual' && module.installed) && (
+            <span className="tag" title="The Voxear Manual is installed with this version">
+              Manual
+            </span>
+          )
+        )}
       </div>
       <span className="cell cell-size row-meta">{size !== undefined ? bytes(size) : ''}</span>
       <span className="cell cell-time row-meta" title={install.installed ? 'Installed' : undefined}>
@@ -159,6 +170,42 @@ function InstallRow({ install, index, size, home }: { install: Install; index: n
       </div>
     </div>
   )
+}
+
+/** Add or remove each optional module, such as the manual. A located engine's files are never changed. */
+function moduleEntries(install: Install): MenuEntry[] {
+  if (install.located || install.missing) return []
+  const entries: MenuEntry[] = []
+  for (const module of install.modules) {
+    if (module.installed) {
+      entries.push({ label: `Remove the ${module.title}`, icon: 'close', run: () => void removeModule(install, module.name, module.title) })
+    } else if (module.available) {
+      entries.push({
+        label: `Add the ${module.title}`,
+        icon: 'download',
+        run: () => useStore.getState().queueModule(install.version, module.name, module.title)
+      })
+    }
+  }
+  return entries.length ? ['divider', ...entries] : []
+}
+
+async function removeModule(install: Install, name: string, title: string) {
+  const store = useStore.getState()
+  const ok = await store.confirm({
+    title: `Remove the ${title}?`,
+    message: `It will be deleted from Voxear ${install.version}, which keeps working without it. You can add it again any time.`,
+    confirm: 'Remove',
+    danger: true
+  })
+  if (!ok) return
+  try {
+    await api.removeModule(install.version, name)
+    await store.refresh()
+    store.toast('ok', `Removed the ${title} from Voxear ${install.version}`)
+  } catch (error) {
+    store.toast('error', failure(error).message)
+  }
 }
 
 async function uninstall(install: Install) {

@@ -69,6 +69,8 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, launcher: comman
         commands::check_launcher_update,
         commands::install_launcher_update,
         commands::restart_launcher,
+        commands::add_module,
+        commands::remove_module,
     ])
 }
 
