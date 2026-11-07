@@ -1,7 +1,7 @@
 // An in-memory stand-in for the Rust core, used when the UI runs in a plain browser. It behaves like the real
 // commands closely enough to preview every screen: installs take a few seconds, and `vox new` reports steps.
 
-import type { Api, Backup, Direction, Install, NewProjectForm, Offer, Progress, Project, Release, Settings } from './api'
+import type { Api, Backup, Direction, Install, Module, ModuleName, NewProjectForm, Offer, Progress, Project, Release, Settings } from './api'
 
 const home = '/home/you'
 const engines = `${home}/.local/share/voxear/engines`
@@ -58,9 +58,12 @@ let projects: Project[] = [
 ]
 
 let settings: Settings = { releases: 'https://releases.example.invalid/voxear/releases.toml' }
-const manual = { name: 'manual', title: 'Voxear Manual', size: 18_400_000 }
-/** Versions whose install has the manual. */
-const manuals = new Set(['0.3.0-beta.1'])
+const modules: Module[] = [
+  { name: 'manual', title: 'Voxear Manual', size: 18_400_000 },
+  { name: 'server', title: 'Dedicated Server', size: 9_200_000 }
+]
+/** Versions whose install has each part. */
+const withModule: Record<ModuleName, Set<string>> = { manual: new Set(['0.3.0-beta.1']), server: new Set(['0.3.0-beta.1']) }
 let backups: Backup[] = [
   {
     archive: `${home}/.local/share/voxear/backups/Orbit-1a2b3c4d/20261012T101500Z.tar.zst`,
@@ -106,8 +109,8 @@ async function simulateInstall(key: string, size: number, onProgress: (progress:
   await wait(250)
 }
 
-/** The newer fake releases ship the manual as a module; 0.2.0 and older carry none. */
-function offersManual(version: string): boolean {
+/** The newer fake releases ship the manual and the server as modules; 0.2.0 and older carry none. */
+function offersModules(version: string): boolean {
   return !['0.2.0', '0.1.0'].includes(version)
 }
 
@@ -126,10 +129,12 @@ export const mockApi: Api = {
   }),
   listInstalls: async (): Promise<Install[]> =>
     installs.map((install) => {
-      const offered = offersManual(install.version)
-      const installed = manuals.has(install.version)
-      const modules = offered || installed ? [{ name: 'manual', title: manual.title, installed, available: offered && !install.located }] : []
-      return { ...install, modules }
+      const offered = offersModules(install.version)
+      const parts = modules
+        .map((module) => ({ module, installed: withModule[module.name].has(install.version) }))
+        .filter(({ installed }) => offered || installed)
+        .map(({ module, installed }) => ({ name: module.name, title: module.title, installed, available: offered && !install.located }))
+      return { ...install, modules: parts }
     }),
   listReleases: async () => {
     await wait(350)
@@ -138,7 +143,7 @@ export const mockApi: Api = {
       releases: releases.map((release) => ({
         ...release,
         installed: installs.some((i) => i.version === release.version),
-        modules: offersManual(release.version) ? [manual] : []
+        modules: offersModules(release.version) ? modules : []
       })),
       stale: null,
       unpublished: false
@@ -150,17 +155,19 @@ export const mockApi: Api = {
     await simulateInstall(version, release.size, onProgress)
     const install = { version: release.version, channel: release.channel, path: `${engines}/${release.version}`, located: false, missing: false, installed: new Date().toISOString() }
     installs.push(install)
-    if (offersManual(release.version) && !without.includes('manual')) manuals.add(release.version)
+    for (const module of modules) {
+      if (offersModules(release.version) && !without.includes(module.name)) withModule[module.name].add(release.version)
+    }
     sortInstalls()
     refreshStatuses()
     return { ...install, modules: [] }
   },
   cancelInstall: async (version) => void cancelled.add(version),
-  addModule: async (version, _name, onProgress) => {
-    await simulateInstall(`${version}+manual`, manual.size, onProgress)
-    manuals.add(version)
+  addModule: async (version, name, onProgress) => {
+    await simulateInstall(`${version}+${name}`, modules.find((module) => module.name === name)?.size ?? 0, onProgress)
+    withModule[name].add(version)
   },
-  removeModule: async (version) => void manuals.delete(version),
+  removeModule: async (version, name) => void withModule[name].delete(version),
   installFile: async (path, onProgress) => {
     await simulateInstall(path, 300_000_000, onProgress)
     const install: Install = { version: '0.5.0-beta.1', channel: 'beta', path: `${engines}/0.5.0-beta.1`, located: false, missing: false, installed: new Date().toISOString(), modules: [] }

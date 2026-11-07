@@ -10,7 +10,7 @@ use semver::Version;
 use crate::channel::Channel;
 use crate::engine::{ENGINE_FILE, EngineInfo, Supports};
 use crate::manifest::{
-    Download, FORMAT, MANIFEST_FILE, MANUAL, Module, Release, ReleaseManifest, SIGNATURE_SUFFIX, module_title,
+    Download, FORMAT, MANIFEST_FILE, Module, ModuleDownload, Release, ReleaseManifest, SIGNATURE_SUFFIX,
 };
 use crate::platform::Platform;
 use crate::signing::TrustedKeys;
@@ -130,11 +130,18 @@ pub fn engine_archive(version: &Version, channel: Channel, platform: Platform) -
 pub fn manual_archive(version: &Version) -> Vec<u8> {
     let page = format!("# Voxear {version}\n\nThe manual for this version.\n");
     tar_zst(&[
-        ArchiveEntry::dir(MANUAL),
+        ArchiveEntry::dir("manual"),
         ArchiveEntry::file("manual/index.md", page.as_bytes(), 0o644),
         ArchiveEntry::dir("manual/pictures"),
         ArchiveEntry::file("manual/pictures/editor.png", b"not really a picture", 0o644),
     ])
+}
+
+/// A fake Dedicated Server, laid out the way `voxear-dist` packs the real one: `bin/voxear-server` alone.
+pub fn server_archive(version: &Version, platform: Platform) -> Vec<u8> {
+    let program = format!("#!/bin/sh\necho \"voxear-server {version}\"\n");
+    let path = Module::Server.path(platform).to_string_lossy().replace('\\', "/");
+    tar_zst(&[ArchiveEntry::dir("bin"), ArchiveEntry::file(path, program.as_bytes(), 0o755)])
 }
 
 /// A folder of fake releases with a signed manifest, laid out the way a release mirror would be.
@@ -180,6 +187,7 @@ impl FakeReleases {
             size: archive.len() as u64,
             sha256: hex(&<sha2::Sha256 as sha2::Digest>::digest(archive)),
             signature,
+            modules: Vec::new(),
         };
         if self.manifest.find(version).is_none() {
             self.manifest.releases.push(Release {
@@ -194,33 +202,51 @@ impl FakeReleases {
             });
         }
         let release = self.release(version);
-        release.downloads.retain(|existing| existing.platform != platform.as_str());
-        release.downloads.push(download);
+        let modules = match release.downloads.iter().position(|existing| existing.platform == platform.as_str()) {
+            Some(index) => release.downloads.remove(index).modules,
+            None => Vec::new(),
+        };
+        release.downloads.push(Download { modules, ..download });
     }
 
     /// Adds the manual as an optional module of `version`, which must already be listed.
     pub fn add_manual(&mut self, version: &str) {
         let version = Version::parse(version).expect("test versions are valid");
-        self.add_module(&version, MANUAL, &manual_archive(&version));
+        self.add_module(&version, Module::Manual, Platform::LinuxX86_64, &manual_archive(&version));
     }
 
-    /// Adds `archive` as the module `name` of `version`, which must already be listed.
-    pub fn add_module(&mut self, version: &Version, name: &str, archive: &[u8]) {
-        let file = format!("voxear-{version}-{name}.tar.zst");
+    /// Adds the Dedicated Server for every platform to `version`, which must already have its downloads.
+    pub fn add_server(&mut self, version: &str) {
+        let version = Version::parse(version).expect("test versions are valid");
+        for platform in Platform::ALL {
+            self.add_module(&version, Module::Server, platform, &server_archive(&version, platform));
+        }
+    }
+
+    /// Adds `archive` as `module` of `version`. A module built per platform goes with the download for
+    /// `platform`, which must already be listed; others go on the release, and `platform` doesn't matter.
+    pub fn add_module(&mut self, version: &Version, module: Module, platform: Platform, archive: &[u8]) {
+        let file = module.archive_name(version, platform);
         let signature = self.key.sign(archive);
         std::fs::write(self.dir.join(&file), archive).expect("the archive can be written");
         write_signature(&self.dir.join(&file), &signature);
-        let module = Module {
-            name: name.to_owned(),
-            title: module_title(name),
+        let entry = ModuleDownload {
+            name: module,
+            title: module.title().to_owned(),
             url: file,
             size: archive.len() as u64,
             sha256: hex(&<sha2::Sha256 as sha2::Digest>::digest(archive)),
             signature,
         };
         let release = self.release(version);
-        release.modules.retain(|existing| existing.name != name);
-        release.modules.push(module);
+        let listed = if module.per_platform() {
+            let download = release.downloads.iter_mut().find(|download| download.platform == platform.as_str());
+            &mut download.expect("the release has a download for the platform").modules
+        } else {
+            &mut release.modules
+        };
+        listed.retain(|existing| existing.name != module);
+        listed.push(entry);
     }
 
     pub fn release(&mut self, version: &Version) -> &mut Release {

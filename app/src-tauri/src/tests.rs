@@ -278,3 +278,34 @@ fn installs_adds_and_removes_the_manual() {
     assert_eq!(install["version"], "0.2.0");
     assert_eq!(manual(&fixture)["installed"], true, "installed with the engine by default");
 }
+
+/// The Dedicated Server goes through the same calls as the manual, offered for this platform beside it.
+#[test]
+fn installs_adds_and_removes_the_server() {
+    let mut fixture = Fixture::new();
+    fixture.fake.add_manual("0.2.0");
+    fixture.fake.add_server("0.2.0");
+    fixture.fake.write();
+    fixture.trust_the_fake_releases();
+
+    let releases = fixture.ok("list_releases", json!({}));
+    let modules = &releases["releases"][0]["modules"];
+    assert_eq!(modules[1]["name"], "server");
+    assert_eq!(modules[1]["title"], "Dedicated Server");
+    assert!(modules[1]["size"].as_u64().unwrap() > 0);
+
+    fixture.ok("install", json!({ "version": "0.2.0", "without": ["server"], "onProgress": channel(1) }));
+    let server = |fixture: &Fixture| fixture.ok("list_installs", json!({}))[0]["modules"][1].clone();
+    assert_eq!(
+        server(&fixture),
+        json!({ "name": "server", "title": "Dedicated Server", "installed": false, "available": true })
+    );
+
+    fixture.ok("add_module", json!({ "version": "0.2.0", "name": "server", "onProgress": channel(2) }));
+    assert_eq!(server(&fixture)["installed"], true);
+    fixture.ok("remove_module", json!({ "version": "0.2.0", "name": "server" }));
+    assert_eq!(server(&fixture)["installed"], false);
+
+    let error = fixture.call("remove_module", json!({ "version": "0.2.0", "name": "bin" })).unwrap_err();
+    assert!(error.to_string().contains("bin"), "{error}");
+}

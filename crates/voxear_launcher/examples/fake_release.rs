@@ -22,6 +22,7 @@ fn main() -> Result<()> {
     ] {
         releases.add(version, channel);
         releases.add_manual(version);
+        releases.add_server(version);
     }
     let manifest = releases.write();
     println!("Wrote fake releases to {}", dir.display());

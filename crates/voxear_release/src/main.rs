@@ -37,7 +37,8 @@ enum Command {
 #[derive(Subcommand)]
 enum EngineCommand {
     /// Sign engine archives and list them in the release manifest. Each archive's engine.toml says its version,
-    /// channel and platform; a module archive, such as voxear-<version>-manual.tar.zst, is listed on its version.
+    /// channel and platform; a module archive, voxear-<version>-manual.tar.zst or
+    /// voxear-<version>-<platform>-server.tar.zst, is listed on its version.
     Add {
         #[arg(required = true)]
         archives: Vec<PathBuf>,
@@ -150,7 +151,10 @@ fn run(cli: Cli) -> Result<()> {
             for added in voxear_release::add_archives(&site.site, &archives, &key, &details)? {
                 match added {
                     Added::Engine(release) => println!("Listed Voxear {} ({})", release.version, release.channel),
-                    Added::Module { version, module } => println!("Listed the {} for Voxear {version}", module.title),
+                    Added::Module { file, module } => {
+                        let platform = file.platform.map(|platform| format!(" ({platform})")).unwrap_or_default();
+                        println!("Listed the {}{platform} for Voxear {}", module.title, file.version)
+                    }
                 }
             }
             for archive in &archives {

@@ -11,10 +11,10 @@ use semver::Version;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Runtime, State};
 use tauri_plugin_updater::UpdaterExt;
-use voxear_launcher::manifest::{self, SIGNATURE_SUFFIX};
+use voxear_launcher::manifest::SIGNATURE_SUFFIX;
 use voxear_launcher::new_project::{self, NewProject, Offer};
 use voxear_launcher::{
-    InstallKind, Layout, Platform, Registry, Removed, Selector, Settings, Store, backup, fetch, launcher_version,
+    InstallKind, Layout, Module, Platform, Registry, Removed, Selector, Settings, Store, backup, fetch, launcher_version,
     project, releases, self_update, upgrade,
 };
 
@@ -109,21 +109,18 @@ pub async fn list_installs(launcher: Shared<'_>) -> Reply<Vec<InstallDto>> {
             .iter()
             .map(|install| {
                 let release = manifest.as_ref().and_then(|manifest| manifest.find(&install.version));
-                let mut names: Vec<String> =
-                    release.map(|r| r.modules.iter().map(|m| m.name.clone()).collect()).unwrap_or_default();
-                if install.has_module(manifest::MANUAL) && !names.iter().any(|name| name == manifest::MANUAL) {
-                    names.push(manifest::MANUAL.to_owned());
-                }
-                let modules = names
+                // Each part the release offers, and any the install has anyway, such as one an older archive carried.
+                let modules = Module::ALL
                     .into_iter()
-                    .map(|name| {
-                        let offered = release.and_then(|release| release.module(&name));
-                        InstallModuleDto {
-                            title: offered.map_or_else(|| manifest::module_title(&name), |module| module.title.clone()),
-                            installed: install.has_module(&name),
+                    .filter_map(|module| {
+                        let offered = release.and_then(|release| release.module(module, launcher.platform));
+                        let installed = install.has_module(module);
+                        (offered.is_some() || installed).then(|| InstallModuleDto {
+                            name: module,
+                            title: offered.map_or_else(|| module.title().to_owned(), |offered| offered.title.clone()),
+                            installed,
                             available: offered.is_some() && install.kind == InstallKind::Managed,
-                            name,
-                        }
+                        })
                     })
                     .collect();
                 InstallDto { modules, ..InstallDto::from(install) }
@@ -155,7 +152,7 @@ pub async fn list_releases(launcher: Shared<'_>) -> Reply<ReleasesDto> {
             .map(|release| {
                 let size = release.download(launcher.platform).map_or(0, |download| download.size);
                 let installed = installs.iter().any(|install| install.version == release.version);
-                ReleaseDto::new(release, size, installed)
+                ReleaseDto::new(release, launcher.platform, size, installed)
             })
             .collect();
         Ok(ReleasesDto { source: Some(source), releases, stale: loaded.stale, unpublished: false })
@@ -168,7 +165,7 @@ pub async fn list_releases(launcher: Shared<'_>) -> Reply<ReleasesDto> {
 pub async fn install(
     launcher: Shared<'_>,
     version: String,
-    without: Option<Vec<String>>,
+    without: Option<Vec<Module>>,
     on_progress: Channel<ProgressDto>,
 ) -> Reply<InstallDto> {
     // Leaving `without` out installs every module the release offers.
@@ -557,13 +554,13 @@ pub fn restart_launcher<R: Runtime>(app: AppHandle<R>) {
     app.restart()
 }
 
-/// Adds an optional module, such as the manual, to one of the launcher's installs: downloaded and checked like the
-/// engine itself. Cancelled the same way as an install, under `<version>+<name>`.
+/// Adds an optional part, such as the manual or the Dedicated Server, to one of the launcher's installs: downloaded
+/// and checked like the engine itself. Cancelled the same way as an install, under `<version>+<name>`.
 #[tauri::command]
 pub async fn add_module(
     launcher: Shared<'_>,
     version: String,
-    name: String,
+    name: Module,
     on_progress: Channel<ProgressDto>,
 ) -> Reply<()> {
     blocking(&launcher, move |launcher| {
@@ -576,18 +573,18 @@ pub async fn add_module(
             .manifest
             .find(&parsed)
             .ok_or_else(|| anyhow!("Voxear {version} isn't in the release list, so its {name} can't be found"))?;
-        let key = format!("{version}+{name}");
+        let key = format!("{version}+{}", name.name());
         let cancel = launcher.cancel_flag(&key);
         let mut progress = |step| _ = on_progress.send(ProgressDto::from(step));
-        let result = launcher.store().add_module(release, &name, &loaded.url, &keys, &mut progress, &cancel);
+        let result = launcher.store().add_module(release, name, &loaded.url, &keys, &mut progress, &cancel);
         launcher.forget_cancel_flag(&key);
         result.map(|_| ())
     })
     .await
 }
 
-/// Removes an optional module, such as the manual, from one of the launcher's installs.
+/// Removes an optional part, such as the manual or the Dedicated Server, from one of the launcher's installs.
 #[tauri::command]
-pub async fn remove_module(launcher: Shared<'_>, version: String, name: String) -> Reply<()> {
-    blocking(&launcher, move |launcher| launcher.store().remove_module(&Version::parse(&version)?, &name)).await
+pub async fn remove_module(launcher: Shared<'_>, version: String, name: Module) -> Reply<()> {
+    blocking(&launcher, move |launcher| launcher.store().remove_module(&Version::parse(&version)?, name)).await
 }

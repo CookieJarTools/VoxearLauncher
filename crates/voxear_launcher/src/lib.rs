@@ -33,7 +33,7 @@ pub mod testing;
 
 pub use channel::{Channel, Selector};
 pub use layout::Layout;
-pub use manifest::{Download, Release, ReleaseManifest};
+pub use manifest::{Download, Module, Release, ReleaseManifest};
 pub use platform::Platform;
 pub use registry::{Project, ProjectStatus, Registry};
 pub use settings::Settings;

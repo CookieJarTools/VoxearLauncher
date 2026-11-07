@@ -1,6 +1,6 @@
 import type { MouseEvent } from 'react'
 import { create } from 'zustand'
-import { api, failure, type AppInfo, type Install, type Progress, type Project, type Releases, type UpdateStatus } from './api'
+import { api, failure, type AppInfo, type Install, type ModuleName, type Progress, type Project, type Releases, type UpdateStatus } from './api'
 import type { IconName } from './components/Icon'
 
 export type View = 'projects' | 'installs' | 'settings'
@@ -15,10 +15,10 @@ export interface Job {
   progress: Progress | null
   error?: string
   /** For a release: the optional modules to leave out. */
-  without?: string[]
+  without?: ModuleName[]
   /** For a module: which version it goes into, which module, and what it's called. */
   version?: string
-  module?: string
+  module?: ModuleName
   title?: string
 }
 
@@ -74,8 +74,8 @@ interface State {
   init(): Promise<void>
   refresh(): Promise<void>
   loadReleases(): Promise<void>
-  queueInstall(version: string, without?: string[]): void
-  queueModule(version: string, name: string, title: string): void
+  queueInstall(version: string, without?: ModuleName[]): void
+  queueModule(version: string, name: ModuleName, title: string): void
   retryJob(key: string): void
   queueFile(path: string): void
   cancelJob(key: string): void

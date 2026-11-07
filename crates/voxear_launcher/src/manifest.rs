@@ -3,11 +3,13 @@
 //! archive can also be checked on its own.
 
 use std::collections::HashSet;
+use std::fmt;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use jiff::Timestamp;
 use semver::Version;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::channel::{Channel, Selector};
 use crate::platform::Platform;
@@ -45,16 +47,82 @@ pub struct Release {
     pub yanked: bool,
     #[serde(default, rename = "download")]
     pub downloads: Vec<Download>,
-    /// Optional parts that are the same on every platform, such as the manual, each unpacked into a folder of its
-    /// own in the install. Releases from before modules existed have none, and older launchers ignore them.
-    #[serde(default, rename = "module", skip_serializing_if = "Vec::is_empty")]
-    pub modules: Vec<Module>,
+    /// Optional parts that are the same on every platform, such as the manual. Releases from before modules
+    /// existed have none, and older launchers ignore them.
+    #[serde(default, rename = "module", skip_serializing_if = "Vec::is_empty", deserialize_with = "known_modules")]
+    pub modules: Vec<ModuleDownload>,
 }
 
+/// The optional parts of an engine install, each shipped as an archive of its own beside the engine's. An engine
+/// install works without any of them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Module {
+    /// Markdown pages and pictures the editor shows from `<install>/manual/` when they are there. The same on
+    /// every platform.
+    Manual,
+    /// `bin/voxear-server`, the program a game's dedicated-server build ships. Built for each platform; without
+    /// it, server builds fall back to the player.
+    Server,
+}
+
+impl Module {
+    pub const ALL: [Module; 2] = [Module::Manual, Module::Server];
+
+    /// Its name in the manifest and in archive names.
+    pub fn name(self) -> &'static str {
+        match self {
+            Module::Manual => "manual",
+            Module::Server => "server",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Module> {
+        Module::ALL.into_iter().find(|module| module.name() == name)
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Module::Manual => "Voxear Manual",
+            Module::Server => "Dedicated Server",
+        }
+    }
+
+    /// Whether each platform has an archive of its own, listed with that platform's download.
+    pub fn per_platform(self) -> bool {
+        self == Module::Server
+    }
+
+    /// What it adds to an install, relative to the install's root: a folder for the manual, one file for the
+    /// server.
+    pub fn path(self, platform: Platform) -> PathBuf {
+        match self {
+            Module::Manual => PathBuf::from("manual"),
+            Module::Server => Path::new("bin").join(format!("voxear-server{}", platform.exe_suffix())),
+        }
+    }
+
+    /// Its archive's file name, as `voxear-dist` writes it: `voxear-0.3.0-manual.tar.zst`, or
+    /// `voxear-0.3.0-linux-x86_64-server.tar.zst`.
+    pub fn archive_name(self, version: &Version, platform: Platform) -> String {
+        if self.per_platform() {
+            format!("voxear-{version}-{platform}-{}.tar.zst", self.name())
+        } else {
+            format!("voxear-{version}-{}.tar.zst", self.name())
+        }
+    }
+}
+
+impl fmt::Display for Module {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.title())
+    }
+}
+
+/// The archive of one optional part, as the manifest lists it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Module {
-    /// Also the folder it unpacks into, such as `manual`.
-    pub name: String,
+pub struct ModuleDownload {
+    pub name: Module,
     /// What the launcher calls it, such as "Voxear Manual".
     pub title: String,
     /// Absolute, or relative to the manifest's own URL.
@@ -67,30 +135,14 @@ pub struct Module {
     pub signature: String,
 }
 
-/// The manual: Markdown pages and pictures the editor shows from `<install>/manual/` when they are there.
-pub const MANUAL: &str = "manual";
-
-/// Folders an engine install has of its own, which no module may claim.
-const ENGINE_FOLDERS: &[&str] = &["bin", "managed", "templates", "docs"];
-
-/// What the launcher calls a module when nothing says otherwise.
-pub fn module_title(name: &str) -> String {
-    match name {
-        MANUAL => "Voxear Manual".to_owned(),
-        _ => {
-            let mut chars = name.chars();
-            chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
-        }
-    }
-}
-
-/// A module's name is a plain folder name: lowercase letters, digits and dashes, starting with a letter, and none
-/// of the engine's own folders.
-pub fn is_module_name(name: &str) -> bool {
-    name.len() <= 32
-        && name.starts_with(|c: char| c.is_ascii_lowercase())
-        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        && !ENGINE_FOLDERS.contains(&name)
+/// Reads a list of modules, leaving out any this launcher doesn't know, so a newer release still parses.
+fn known_modules<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<ModuleDownload>, D::Error> {
+    let listed = Vec::<toml::Table>::deserialize(deserializer)?;
+    listed
+        .into_iter()
+        .filter(|entry| entry.get("name").and_then(|name| name.as_str()).and_then(Module::from_name).is_some())
+        .map(|entry| toml::Value::Table(entry).try_into().map_err(serde::de::Error::custom))
+        .collect()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -105,6 +157,9 @@ pub struct Download {
     pub sha256: String,
     /// The archive's minisign signature: the whole `.minisig` file.
     pub signature: String,
+    /// Optional parts built for this platform, such as the Dedicated Server. Older launchers ignore them.
+    #[serde(default, rename = "module", skip_serializing_if = "Vec::is_empty", deserialize_with = "known_modules")]
+    pub modules: Vec<ModuleDownload>,
 }
 
 impl ReleaseManifest {
@@ -187,8 +242,15 @@ impl Release {
         self.downloads.iter().find(|download| download.platform == platform.as_str())
     }
 
-    pub fn module(&self, name: &str) -> Option<&Module> {
-        self.modules.iter().find(|module| module.name == name)
+    /// The archive of `module` for `platform`, when this release offers it.
+    pub fn module(&self, module: Module, platform: Platform) -> Option<&ModuleDownload> {
+        let listed = if module.per_platform() { &self.download(platform)?.modules } else { &self.modules };
+        listed.iter().find(|entry| entry.name == module)
+    }
+
+    /// Every optional part this release offers on `platform`.
+    pub fn offered(&self, platform: Platform) -> Vec<&ModuleDownload> {
+        Module::ALL.into_iter().filter_map(|module| self.module(module, platform)).collect()
     }
 
     /// Whether this launcher is too old to install the release.
@@ -215,23 +277,33 @@ impl Release {
                 bail!("the {} download for {} has a malformed SHA-256", download.platform, self.version);
             }
         }
-        let mut names = HashSet::new();
-        for module in &self.modules {
-            ensure!(
-                is_module_name(&module.name),
-                "{} has a module called `{}`, which isn't allowed",
-                self.version,
-                module.name
-            );
-            ensure!(names.insert(module.name.as_str()), "{} lists the {} module twice", self.version, module.name);
-            ensure!(!module.title.trim().is_empty(), "the {} module of {} has no title", module.name, self.version);
-            ensure!(!module.url.trim().is_empty(), "the {} module of {} has no URL", module.name, self.version);
-            ensure!(
-                is_sha256(&module.sha256),
-                "the {} module of {} has a malformed SHA-256",
-                module.name,
-                self.version
-            );
+        self.check_modules(&self.modules, None)?;
+        for download in &self.downloads {
+            self.check_modules(&download.modules, Some(&download.platform))?;
+        }
+        Ok(())
+    }
+
+    /// `platform` is the download the modules are listed with, or `None` for the release's own.
+    fn check_modules(&self, listed: &[ModuleDownload], platform: Option<&str>) -> Result<()> {
+        let version = &self.version;
+        let mut seen = HashSet::new();
+        for module in listed {
+            let name = module.name;
+            match platform {
+                Some(platform) => ensure!(
+                    name.per_platform(),
+                    "the {platform} download for {version} lists the {name}, which is the same on every platform"
+                ),
+                None => ensure!(
+                    !name.per_platform(),
+                    "{version} lists the {name} once, but it is built for each platform and belongs with its download"
+                ),
+            }
+            ensure!(seen.insert(name), "{version} lists the {name} twice");
+            ensure!(!module.title.trim().is_empty(), "the {name} of {version} has no title");
+            ensure!(!module.url.trim().is_empty(), "the {name} of {version} has no URL");
+            ensure!(is_sha256(&module.sha256), "the {name} of {version} has a malformed SHA-256");
         }
         Ok(())
     }
@@ -385,33 +457,65 @@ signature = "sig"
         assert!(between(Some("0.3.0"), "0.2.0").is_empty());
     }
 
-    fn module(name: &str) -> String {
+    fn module(table: &str, name: &str) -> String {
         format!(
-            "\n[[release.module]]\nname = \"{name}\"\ntitle = \"Voxear Manual\"\nurl = \"voxear-0.3.0-{name}.tar.zst\"\nsize = 512\nsha256 = \"{HASH}\"\nsignature = \"sig\"\n"
+            "\n[[{table}]]\nname = \"{name}\"\ntitle = \"Part\"\nurl = \"voxear-0.3.0-{name}.tar.zst\"\nsize = 512\nsha256 = \"{HASH}\"\nsignature = \"sig\"\n"
         )
+    }
+
+    /// A release with the manual, and the Dedicated Server for each platform after its download.
+    fn with_modules() -> String {
+        let release = release("0.3.0", "stable", "");
+        let (linux, windows) = release.split_at(release.find("\n[[release.download]]\nplatform = \"windows").unwrap());
+        let server = module("release.download.module", "server");
+        format!("{linux}{server}{windows}{server}{}", module("release.module", "manual"))
     }
 
     #[test]
     fn reads_optional_modules() {
-        let manifest =
-            ReleaseManifest::parse(&manifest(&(release("0.3.0", "stable", "") + &module("manual")))).unwrap();
+        let manifest = ReleaseManifest::parse(&manifest(&with_modules())).unwrap();
         let release = manifest.find(&v("0.3.0")).unwrap();
-        assert_eq!(release.module(MANUAL).unwrap().size, 512);
-        assert!(sample().find(&v("0.3.0")).unwrap().modules.is_empty(), "older releases have none");
+        assert_eq!(release.module(Module::Manual, Platform::LinuxX86_64).unwrap().size, 512);
+        for platform in Platform::ALL {
+            assert_eq!(release.module(Module::Server, platform).unwrap().name, Module::Server);
+            assert_eq!(release.offered(platform).len(), 2);
+        }
+        let older = sample();
+        assert!(older.find(&v("0.3.0")).unwrap().offered(Platform::LinuxX86_64).is_empty(), "older releases have none");
         let again = ReleaseManifest::parse(&manifest.to_toml().unwrap()).unwrap();
-        assert_eq!(again.find(&v("0.3.0")).unwrap().modules, release.modules);
+        let again = again.find(&v("0.3.0")).unwrap();
+        assert_eq!(again.modules, release.modules);
+        assert_eq!(again.downloads[1].modules, release.downloads[1].modules);
     }
 
     #[test]
-    fn refuses_modules_that_would_claim_engine_folders() {
-        for bad in ["bin", "Manual", "../manual", "two words", ""] {
-            let text = manifest(&(release("0.3.0", "stable", "") + &module(bad)));
-            assert!(ReleaseManifest::parse(&text).is_err(), "{bad:?} should be refused");
-        }
-        let twice = manifest(&(release("0.3.0", "stable", "") + &module("manual") + &module("manual")));
+    fn skips_modules_it_does_not_know() {
+        let text = manifest(&(release("0.3.0", "stable", "") + &module("release.module", "samples")));
+        let manifest = ReleaseManifest::parse(&text).unwrap();
+        assert!(manifest.find(&v("0.3.0")).unwrap().modules.is_empty());
+    }
+
+    #[test]
+    fn refuses_modules_listed_twice_or_in_the_wrong_place() {
+        let manual = module("release.module", "manual");
+        let twice = manifest(&(release("0.3.0", "stable", "") + &manual + &manual));
         assert!(ReleaseManifest::parse(&twice).is_err());
-        assert_eq!(module_title("manual"), "Voxear Manual");
-        assert_eq!(module_title("samples"), "Samples");
+        let server_once = manifest(&(release("0.3.0", "stable", "") + &module("release.module", "server")));
+        assert!(ReleaseManifest::parse(&server_once).unwrap_err().to_string().contains("built for each platform"));
+        let per_platform = manifest(&(release("0.3.0", "stable", "") + &module("release.download.module", "manual")));
+        assert!(ReleaseManifest::parse(&per_platform).unwrap_err().to_string().contains("same on every platform"));
+    }
+
+    #[test]
+    fn names_module_archives_and_paths() {
+        let version = v("0.3.0");
+        assert_eq!(Module::Manual.archive_name(&version, Platform::LinuxX86_64), "voxear-0.3.0-manual.tar.zst");
+        assert_eq!(
+            Module::Server.archive_name(&version, Platform::WindowsX86_64),
+            "voxear-0.3.0-windows-x86_64-server.tar.zst"
+        );
+        assert_eq!(Module::Server.path(Platform::WindowsX86_64), Path::new("bin/voxear-server.exe"));
+        assert_eq!(Module::Manual.path(Platform::LinuxX86_64), Path::new("manual"));
     }
 
     #[test]

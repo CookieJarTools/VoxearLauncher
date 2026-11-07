@@ -23,8 +23,9 @@ is to Unity.
   can also set up Git and your code editor at the same time.
 - **Moving a project to another engine version.** The launcher backs the project up first, so you can always go
   back.
-- **Optional parts.** Choose what comes with each engine version, such as the offline Voxear Manual. Anything you
-  leave out can be added later from **Installs**, without installing the version again.
+- **Optional parts.** Choose what comes with each engine version: the offline Voxear Manual, and the Dedicated
+  Server that dedicated-server builds of your game ship. Anything you leave out can be added later from
+  **Installs**, without installing the version again.
 - **A command line for everything.** `voxup` does all of the above from a terminal, for scripts and build servers.
 - **Keeps itself up to date.** The launcher updates itself from signed releases, checked the same way as the engine.
 
@@ -88,7 +89,8 @@ Already have a Voxear project? Click **Add** on the **Projects** screen and choo
 | --- | --- |
 | `voxup list --available` | Lists installed engine versions, and those you can install |
 | `voxup install stable` | Installs the newest stable version (or `beta`, `nightly`, or a version such as `0.3`) |
-| `voxup install 0.3 --without-manual` | Installs a version without the Voxear Manual |
+| `voxup install 0.3 --without-manual` | Installs a version without the Voxear Manual (or `--without-server`, the Dedicated Server) |
+| `voxup server add 0.3.0` | Adds the Dedicated Server to an installed version (or `remove`; `voxup manual` does the same for the manual) |
 | `voxup uninstall 0.3.0` | Removes a version. It refuses while projects use it, unless you add `--force` |
 | `voxup locate <folder>` | Uses an engine installed somewhere else, such as one you built yourself |
 | `voxup projects` | Lists your projects, with what each one needs |

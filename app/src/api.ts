@@ -25,12 +25,15 @@ export interface Install {
   located: boolean
   missing: boolean
   installed: string | null
-  /** Optional parts, such as the manual: what's in the install, and what its release offers. */
+  /** Optional parts, such as the manual and the Dedicated Server: what's in the install, and what its release offers. */
   modules: InstallModule[]
 }
 
+/** The optional parts of an install. */
+export type ModuleName = 'manual' | 'server'
+
 export interface InstallModule {
-  name: string
+  name: ModuleName
   title: string
   installed: boolean
   /** The release offers it, so it can be added. */
@@ -39,7 +42,7 @@ export interface InstallModule {
 
 /** An optional part of a release, such as the manual. */
 export interface Module {
-  name: string
+  name: ModuleName
   title: string
   size: number
 }
@@ -186,9 +189,9 @@ export interface Api {
   appInfo(): Promise<AppInfo>
   listInstalls(): Promise<Install[]>
   listReleases(): Promise<Releases>
-  install(version: string, without: string[], onProgress: (progress: Progress) => void): Promise<Install>
-  addModule(version: string, name: string, onProgress: (progress: Progress) => void): Promise<void>
-  removeModule(version: string, name: string): Promise<void>
+  install(version: string, without: ModuleName[], onProgress: (progress: Progress) => void): Promise<Install>
+  addModule(version: string, name: ModuleName, onProgress: (progress: Progress) => void): Promise<void>
+  removeModule(version: string, name: ModuleName): Promise<void>
   cancelInstall(version: string): Promise<void>
   installFile(path: string, onProgress: (progress: Progress) => void): Promise<Install>
   locate(path: string): Promise<Install>

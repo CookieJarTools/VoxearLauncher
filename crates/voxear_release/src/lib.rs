@@ -21,8 +21,10 @@ use base64::engine::general_purpose::STANDARD;
 use jiff::{SignedDuration, Timestamp};
 use semver::Version;
 use sha2::{Digest, Sha256};
+use voxear_launcher::archive;
 use voxear_launcher::engine::{ENGINE_FILE, EngineInfo};
-use voxear_launcher::manifest::{self, Download, Module, Release, ReleaseManifest, SIGNATURE_SUFFIX};
+use voxear_launcher::manifest::{self, Download, Module, ModuleDownload, Release, ReleaseManifest, SIGNATURE_SUFFIX};
+use voxear_launcher::platform::Platform;
 use voxear_launcher::self_update::{self, PlatformUpdate, UpdateChannel, UpdateManifest};
 use voxear_launcher::store::hex;
 
@@ -138,6 +140,7 @@ pub fn add_engine(site: &Path, archive: &Path, key: &Key, details: &EngineReleas
         size: bytes.len() as u64,
         sha256: hex(&Sha256::digest(&bytes)),
         signature,
+        modules: Vec::new(),
     };
 
     let mut releases = load_engine_manifest(site)?;
@@ -165,8 +168,12 @@ pub fn add_engine(site: &Path, archive: &Path, key: &Key, details: &EngineReleas
             releases.releases.last_mut().expect("just pushed")
         }
     };
-    release.downloads.retain(|existing| existing.platform != download.platform);
-    release.downloads.push(download);
+    // A platform's own modules, such as the Dedicated Server, stay listed when its engine archive is added again.
+    let modules = match release.downloads.iter().position(|existing| existing.platform == download.platform) {
+        Some(index) => release.downloads.remove(index).modules,
+        None => Vec::new(),
+    };
+    release.downloads.push(Download { modules, ..download });
     release.downloads.sort_by(|a, b| a.platform.cmp(&b.platform));
     if details.notes.is_some() {
         release.notes = details.notes.clone();
@@ -182,12 +189,22 @@ pub fn add_engine(site: &Path, archive: &Path, key: &Key, details: &EngineReleas
 /// What one archive given to `engine add` turned out to be.
 pub enum Added {
     Engine(Release),
-    Module { version: Version, module: Module },
+    Module { file: ModuleFile, module: ModuleDownload },
+}
+
+/// A module archive, known by its file name.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModuleFile {
+    pub version: Version,
+    pub module: Module,
+    /// For a module built per platform, such as the Dedicated Server.
+    pub platform: Option<Platform>,
 }
 
 /// Adds engine archives and module archives together, as `voxear-dist` writes them: `voxear-<version>-<platform>
-/// .tar.zst` with an `engine.toml`, and modules such as `voxear-<version>-manual.tar.zst`. Engine archives go first,
-/// so a module always finds its release, whatever order the files came in.
+/// .tar.zst` with an `engine.toml`, and modules such as `voxear-<version>-manual.tar.zst` and
+/// `voxear-<version>-<platform>-server.tar.zst`. Engine archives go first, so a module always finds its release,
+/// whatever order the files came in.
 pub fn add_archives(site: &Path, archives: &[PathBuf], key: &Key, details: &EngineRelease) -> Result<Vec<Added>> {
     let mut engines = Vec::new();
     let mut modules = Vec::new();
@@ -195,92 +212,99 @@ pub fn add_archives(site: &Path, archives: &[PathBuf], key: &Key, details: &Engi
         if engine_info(archive).is_ok() {
             engines.push(archive);
         } else {
-            let (version, name) = module_of(archive).ok_or_else(|| {
+            let file = module_of(archive).ok_or_else(|| {
                 anyhow!(
-                    "{} has no {ENGINE_FILE} and isn't named like a module (voxear-<version>-<module>.tar.zst)",
+                    "{} has no {ENGINE_FILE} and isn't named like a module (voxear-<version>-manual.tar.zst or \
+                     voxear-<version>-<platform>-server.tar.zst)",
                     archive.display()
                 )
             })?;
-            modules.push((archive, version, name));
+            modules.push((archive, file));
         }
     }
     let mut added = Vec::new();
     for archive in engines {
         added.push(Added::Engine(add_engine(site, archive, key, details)?));
     }
-    for (archive, version, name) in modules {
-        let module = add_module(site, archive, &version, &name, key, details)?;
-        added.push(Added::Module { version, module });
+    for (archive, file) in modules {
+        let module = add_module(site, archive, &file, key, details)?;
+        added.push(Added::Module { file, module });
     }
     Ok(added)
 }
 
-/// Lists a module archive, such as the manual, on an engine release that is already in the manifest. Every entry
-/// must be inside the module's folder, which is where the launcher unpacks it.
+/// Lists a module archive on an engine release that is already in the manifest: the manual on the release, the
+/// Dedicated Server on its platform's download. Every entry must be what the module adds to an install, so it can
+/// never change the engine's own files.
 pub fn add_module(
     site: &Path,
     archive: &Path,
-    version: &Version,
-    name: &str,
+    file: &ModuleFile,
     key: &Key,
     details: &EngineRelease,
-) -> Result<Module> {
-    ensure!(manifest::is_module_name(name), "`{name}` can't be a module's name");
-    check_module_entries(archive, name)?;
+) -> Result<ModuleDownload> {
+    let ModuleFile { version, module, platform } = file;
+    // The manual's path is the same on every platform.
+    archive::check_module(archive, *module, platform.unwrap_or(Platform::ALL[0]))
+        .with_context(|| format!("{} can't be listed", archive.display()))?;
     let mut releases = load_engine_manifest(site)?;
     let release = releases.releases.iter_mut().find(|release| &release.version == version).ok_or_else(|| {
         anyhow!(
-            "{} is a module of Voxear {version}, which isn't in the manifest yet; add its engine archive too",
+            "{} is the {module} of Voxear {version}, which isn't in the manifest yet; add its engine archive too",
             archive.display()
         )
     })?;
+    let listed = match platform {
+        Some(platform) => {
+            let download = release.downloads.iter_mut().find(|download| download.platform == platform.as_str());
+            let download = download.ok_or_else(|| {
+                anyhow!(
+                    "{} is the {module} of Voxear {version} for {platform}, which has no engine archive in the \
+                     manifest yet; add it too",
+                    archive.display()
+                )
+            })?;
+            &mut download.modules
+        }
+        None => &mut release.modules,
+    };
 
     let signature = key.sign_file(archive, version)?;
     fs::write(signature_path(archive), &signature)?;
     let bytes = fs::read(archive).with_context(|| format!("couldn't read {}", archive.display()))?;
-    let file = archive.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = archive.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
     let tag = details.tag.clone().unwrap_or_else(|| format!("engine-v{version}"));
     let base = details.download_base.as_deref().unwrap_or(DOWNLOAD_BASE).trim_end_matches('/');
-    let module = Module {
-        name: name.to_owned(),
-        title: manifest::module_title(name),
-        url: format!("{base}/{tag}/{file}"),
+    let entry = ModuleDownload {
+        name: *module,
+        title: module.title().to_owned(),
+        url: format!("{base}/{tag}/{name}"),
         size: bytes.len() as u64,
         sha256: hex(&Sha256::digest(&bytes)),
         signature,
     };
-    release.modules.retain(|existing| existing.name != module.name);
-    release.modules.push(module.clone());
-    release.modules.sort_by(|a, b| a.name.cmp(&b.name));
+    listed.retain(|existing| existing.name != entry.name);
+    listed.push(entry.clone());
+    listed.sort_by_key(|existing| existing.name);
     save_engine_manifest(site, releases, key)?;
-    Ok(module)
+    Ok(entry)
 }
 
-/// The version and module name in a module archive's file name: `voxear-0.3.0-manual.tar.zst` is the manual of
-/// 0.3.0. The name is the last part, so versions with tags (`0.4.0-nightly.20261101`) read correctly.
-pub fn module_of(archive: &Path) -> Option<(Version, String)> {
+/// What a module archive's file name says it is: `voxear-0.3.0-manual.tar.zst` is the manual of 0.3.0, and
+/// `voxear-0.3.0-linux-x86_64-server.tar.zst` its Dedicated Server for Linux. The module is the last part, so
+/// versions with tags (`0.4.0-nightly.20261101`) read correctly.
+pub fn module_of(archive: &Path) -> Option<ModuleFile> {
     let file = archive.file_name()?.to_str()?;
     let middle = file.strip_prefix("voxear-")?.strip_suffix(".tar.zst")?;
-    let (version, name) = middle.rsplit_once('-')?;
-    let version = Version::parse(version).ok()?;
-    manifest::is_module_name(name).then(|| (version, name.to_owned()))
-}
-
-fn check_module_entries(archive: &Path, name: &str) -> Result<()> {
-    let file = File::open(archive).with_context(|| format!("couldn't open {}", archive.display()))?;
-    let mut tar = tar::Archive::new(zstd::Decoder::new(file).context("it isn't a .tar.zst")?);
-    for entry in tar.entries()? {
-        let entry = entry?;
-        let path = entry.path()?.into_owned();
-        let first = path.components().find(|part| !matches!(part, std::path::Component::CurDir));
-        ensure!(
-            first == Some(std::path::Component::Normal(name.as_ref())),
-            "{} holds {}, which isn't in its {name} folder",
-            archive.display(),
-            path.display()
-        );
+    let (rest, name) = middle.rsplit_once('-')?;
+    let module = Module::from_name(name)?;
+    if !module.per_platform() {
+        return Some(ModuleFile { version: Version::parse(rest).ok()?, module, platform: None });
     }
-    Ok(())
+    Platform::ALL.into_iter().find_map(|platform| {
+        let version = rest.strip_suffix(platform.as_str())?.strip_suffix('-')?;
+        Some(ModuleFile { version: Version::parse(version).ok()?, module, platform: Some(platform) })
+    })
 }
 
 /// Marks a release as pulled, or puts it back: it stays installable by exact version, so pinned projects open.
@@ -613,14 +637,16 @@ mod tests {
         let engine = fixture.archive("0.4.0-nightly.20261101", Channel::Nightly);
         let manual = fixture.dir.path().join("build").join("voxear-0.4.0-nightly.20261101-manual.tar.zst");
         fs::write(&manual, voxear_launcher::testing::manual_archive(&version)).unwrap();
-        assert_eq!(module_of(&manual), Some((version.clone(), "manual".to_owned())));
+        let file = ModuleFile { version: version.clone(), module: Module::Manual, platform: None };
+        assert_eq!(module_of(&manual), Some(file));
 
         // The manual first, as a glob might give it: the engine archive is still listed before it.
         let added = add_archives(&fixture.site, &[manual.clone(), engine], &key, &fixture.local()).unwrap();
         assert!(matches!(added[0], Added::Engine(_)));
-        assert!(
-            matches!(&added[1], Added::Module { module, .. } if module.name == "manual" && module.title == "Voxear Manual")
-        );
+        assert!(matches!(
+            &added[1],
+            Added::Module { module, .. } if module.name == Module::Manual && module.title == "Voxear Manual"
+        ));
         assert!(signature_path(&manual).is_file());
 
         // The launcher installs the engine with its manual, checking both.
@@ -632,7 +658,41 @@ mod tests {
         let store = Store::new(layout, Platform::current().unwrap());
         let release = loaded.manifest.find(&version).unwrap();
         let install = store.install(release, &loaded.url, &keys, &mut |_| {}, &AtomicBool::new(false)).unwrap();
-        assert!(install.has_module("manual"));
+        assert!(install.has_module(Module::Manual));
+    }
+
+    #[test]
+    fn lists_the_server_on_its_platforms_download() {
+        let fixture = Fixture::new();
+        let (key, made) = fixture.key("engine", false);
+        let version = Version::parse("0.4.0-nightly.20261101").unwrap();
+        let platform = Platform::current().unwrap();
+        let engine = fixture.archive("0.4.0-nightly.20261101", Channel::Nightly);
+        let server = fixture.dir.path().join("build").join(Module::Server.archive_name(&version, platform));
+        fs::write(&server, voxear_launcher::testing::server_archive(&version, platform)).unwrap();
+        let file = ModuleFile { version: version.clone(), module: Module::Server, platform: Some(platform) };
+        assert_eq!(module_of(&server), Some(file));
+
+        let added = add_archives(&fixture.site, &[server.clone(), engine.clone()], &key, &fixture.local()).unwrap();
+        assert!(matches!(&added[1], Added::Module { module, .. } if module.name == Module::Server));
+        assert!(signature_path(&server).is_file());
+
+        // Adding the engine archive again keeps its server listed.
+        add_engine(&fixture.site, &engine, &key, &fixture.local()).unwrap();
+        let listed = load_engine_manifest(&fixture.site).unwrap();
+        let release = listed.find(&version).unwrap();
+        assert!(release.modules.is_empty(), "the server isn't listed for every platform");
+        assert_eq!(release.module(Module::Server, platform).unwrap().size, fs::metadata(&server).unwrap().len());
+
+        let mut keys = TrustedKeys::new();
+        keys.add(&made.public_line).unwrap();
+        let layout = Layout::new(fixture.dir.path().join("home"));
+        let url = engine_manifest_path(&fixture.site).to_string_lossy().into_owned();
+        let loaded = releases::load(&url, &keys, &layout).unwrap();
+        let store = Store::new(layout, platform);
+        let release = loaded.manifest.find(&version).unwrap();
+        let install = store.install(release, &loaded.url, &keys, &mut |_| {}, &AtomicBool::new(false)).unwrap();
+        assert!(install.has_module(Module::Server));
     }
 
     #[test]
@@ -649,7 +709,14 @@ mod tests {
         let entries = [voxear_launcher::testing::ArchiveEntry::file("bin/vox", b"x", 0o755)];
         fs::write(&sneaky, voxear_launcher::testing::tar_zst(&entries)).unwrap();
         let error = add_archives(&fixture.site, &[sneaky], &key, &fixture.local()).err().unwrap();
-        assert!(error.to_string().contains("isn't in its manual folder"), "{error}");
+        assert!(format!("{error:#}").contains("may only hold manual"), "{error:#}");
+
+        let server = fixture.dir.path().join("voxear-0.3.0-windows-x86_64-server.tar.zst");
+        let entries = [voxear_launcher::testing::ArchiveEntry::file("bin/voxear-server.exe", b"x", 0o755)];
+        fs::write(&server, voxear_launcher::testing::tar_zst(&entries)).unwrap();
+        let error = add_archives(&fixture.site, &[server], &key, &fixture.local()).err().unwrap();
+        assert!(error.to_string().contains("for windows-x86_64, which has no engine archive"), "{error}");
+        assert!(module_of(Path::new("voxear-0.3.0-server.tar.zst")).is_none(), "the server needs its platform");
     }
 
     #[test]

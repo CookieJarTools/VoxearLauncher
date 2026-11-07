@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use voxear_launcher::backup::Backup;
 use voxear_launcher::new_project::NewProject;
 use voxear_launcher::upgrade::{Direction, Event, Report};
-use voxear_launcher::{Channel, Install, InstallKind, Progress, Project, ProjectStatus, Release};
+use voxear_launcher::{Channel, Install, InstallKind, Module, Platform, Progress, Project, ProjectStatus, Release};
 
 /// A command's error. `cancelled` tells a cancelled install apart from a failed one.
 #[derive(Debug, Serialize)]
@@ -45,15 +45,15 @@ pub struct InstallDto {
     pub located: bool,
     pub missing: bool,
     pub installed: Option<String>,
-    /// Optional parts, such as the manual: what's in the install, and what its release offers. Filled in by
-    /// `list_installs`.
+    /// Optional parts, such as the manual and the Dedicated Server: what's in the install, and what its release
+    /// offers. Filled in by `list_installs`.
     pub modules: Vec<InstallModuleDto>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallModuleDto {
-    pub name: String,
+    pub name: Module,
     pub title: String,
     pub installed: bool,
     /// The release offers it, so it can be added.
@@ -63,7 +63,7 @@ pub struct InstallModuleDto {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModuleDto {
-    pub name: String,
+    pub name: Module,
     pub title: String,
     pub size: u64,
 }
@@ -96,7 +96,8 @@ pub struct ReleaseDto {
 }
 
 impl ReleaseDto {
-    pub fn new(release: &Release, size: u64, installed: bool) -> Self {
+    /// `size` is the engine archive's for `platform`; the modules are those offered there.
+    pub fn new(release: &Release, platform: Platform, size: u64, installed: bool) -> Self {
         Self {
             version: release.version.to_string(),
             channel: release.channel,
@@ -106,9 +107,9 @@ impl ReleaseDto {
             installed,
             needs_newer_launcher: release.needs_newer_launcher(),
             modules: release
-                .modules
-                .iter()
-                .map(|module| ModuleDto { name: module.name.clone(), title: module.title.clone(), size: module.size })
+                .offered(platform)
+                .into_iter()
+                .map(|module| ModuleDto { name: module.name, title: module.title.clone(), size: module.size })
                 .collect(),
         }
     }

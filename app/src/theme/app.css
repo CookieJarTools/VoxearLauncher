@@ -537,6 +537,7 @@ select.input option {
 
 .cell-tag {
   width: 124px;
+  gap: 4px;
 }
 
 .cell-size {

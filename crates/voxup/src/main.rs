@@ -14,7 +14,7 @@ use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use voxear_launcher::fetch;
 use voxear_launcher::releases::{self, Releases};
-use voxear_launcher::{Layout, Platform, Registry, Settings, Store, TrustedKeys};
+use voxear_launcher::{Layout, Module, Platform, Registry, Settings, Store, TrustedKeys};
 
 #[derive(Parser)]
 #[command(name = "voxup", version, about = "Install Voxear engine versions, and create and open projects")]
@@ -44,10 +44,16 @@ enum Command {
         /// Leave out the Voxear Manual, which is otherwise installed with the engine when the release offers it.
         #[arg(long)]
         without_manual: bool,
+        /// Leave out the Dedicated Server, the program server builds ship; without it they use the player.
+        #[arg(long)]
+        without_server: bool,
     },
     /// Add the Voxear Manual to an installed version, or remove it.
     #[command(subcommand)]
-    Manual(engines::ManualCommand),
+    Manual(engines::ModuleCommand),
+    /// Add the Dedicated Server, which server builds ship, to an installed version, or remove it.
+    #[command(subcommand)]
+    Server(engines::ModuleCommand),
     /// Uninstall an engine version. An engine added with `locate` is forgotten, and its files are kept.
     Uninstall {
         version: String,
@@ -114,10 +120,13 @@ fn run(cli: Cli) -> Result<()> {
     let launcher = Launcher::new(cli.releases)?;
     match cli.command {
         Command::List { available } => engines::list(&launcher, available),
-        Command::Install { version, file, without_manual } => {
-            engines::install(&launcher, version, file, without_manual)
+        Command::Install { version, file, without_manual, without_server } => {
+            let left_out = [(without_manual, Module::Manual), (without_server, Module::Server)];
+            let without = left_out.into_iter().filter(|(leave, _)| *leave).map(|(_, module)| module).collect();
+            engines::install(&launcher, version, file, without)
         }
-        Command::Manual(command) => engines::manual(&launcher, command),
+        Command::Manual(command) => engines::module(&launcher, Module::Manual, command),
+        Command::Server(command) => engines::module(&launcher, Module::Server, command),
         Command::Uninstall { version, force } => engines::uninstall(&launcher, &version, force),
         Command::Locate { folder } => engines::locate(&launcher, &folder),
         Command::Projects => projects::list(&launcher),

@@ -4,10 +4,13 @@
 use std::cell::Cell;
 use std::fs::File;
 use std::io::{self, Read};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
 
 use anyhow::{Context, Result, bail};
+
+use crate::manifest::Module;
+use crate::platform::Platform;
 
 /// Unpacks `archive` into `dest`, calling `progress` with how many compressed bytes have been read so far.
 pub fn unpack(archive: &Path, dest: &Path, progress: &mut dyn FnMut(u64)) -> Result<()> {
@@ -15,18 +18,47 @@ pub fn unpack(archive: &Path, dest: &Path, progress: &mut dyn FnMut(u64)) -> Res
     unpack_reader(file, dest, progress)
 }
 
-/// Unpacks a module's archive into `dest`. Every entry must be inside the module's own folder, `<name>/`, so a
-/// module can never change the engine's files.
-pub fn unpack_module(archive: &Path, dest: &Path, name: &str, progress: &mut dyn FnMut(u64)) -> Result<()> {
+/// Unpacks an optional part's archive into `dest`. Every entry must be the part's own path, something inside it,
+/// or a folder on the way to it (`manual/…`, or `bin` and `bin/voxear-server`), so a part can never change the
+/// engine's files.
+pub fn unpack_module(
+    archive: &Path,
+    dest: &Path,
+    module: Module,
+    platform: Platform,
+    progress: &mut dyn FnMut(u64),
+) -> Result<()> {
     let file = File::open(archive).with_context(|| format!("couldn't open {}", archive.display()))?;
-    unpack_entries(file, dest, Some(name), progress)
+    unpack_entries(file, dest, Some((module, &module.path(platform))), progress)
+}
+
+/// Checks an optional part's archive the way [`unpack_module`] would, without unpacking it.
+pub fn check_module(archive: &Path, module: Module, platform: Platform) -> Result<()> {
+    let file = File::open(archive).with_context(|| format!("couldn't open {}", archive.display()))?;
+    let mut tar = tar::Archive::new(zstd::Decoder::new(file).context("it isn't zstd-compressed")?);
+    let path = module.path(platform);
+    for entry in tar.entries().context("it isn't a tar archive")? {
+        let entry = entry.context("it is damaged")?;
+        let kind = entry.header().entry_type();
+        let entry_path = entry.path().context("it has an unreadable file name")?;
+        if !kind.is_pax_global_extensions() && !belongs_to(&entry_path, kind.is_dir(), &path) {
+            bail!("the {module} archive may only hold {}, but it holds {}", path.display(), entry_path.display());
+        }
+    }
+    Ok(())
 }
 
 pub fn unpack_reader(reader: impl Read, dest: &Path, progress: &mut dyn FnMut(u64)) -> Result<()> {
     unpack_entries(reader, dest, None, progress)
 }
 
-fn unpack_entries(reader: impl Read, dest: &Path, only_in: Option<&str>, progress: &mut dyn FnMut(u64)) -> Result<()> {
+/// `only` is the part an archive holds, which every entry must belong to.
+fn unpack_entries(
+    reader: impl Read,
+    dest: &Path,
+    only: Option<(Module, &Path)>,
+    progress: &mut dyn FnMut(u64),
+) -> Result<()> {
     std::fs::create_dir_all(dest).with_context(|| format!("couldn't create {}", dest.display()))?;
     let consumed = Rc::new(Cell::new(0));
     let counted = Counted { inner: reader, consumed: consumed.clone() };
@@ -43,10 +75,10 @@ fn unpack_entries(reader: impl Read, dest: &Path, only_in: Option<&str>, progres
         if !kind.is_file() && !kind.is_dir() {
             bail!("the engine archive holds {} as a {kind:?}; only files and folders are allowed", path.display());
         }
-        if let Some(folder) = only_in
-            && first_folder(&path) != Some(folder)
+        if let Some((module, part)) = only
+            && !belongs_to(&path, kind.is_dir(), part)
         {
-            bail!("the {folder} archive holds {}, which isn't in its {folder} folder", path.display());
+            bail!("the {module} archive may only hold {}, but it holds {}", part.display(), path.display());
         }
         if !stays_inside(&path)
             || !entry.unpack_in(dest).with_context(|| format!("couldn't unpack {}", path.display()))?
@@ -58,11 +90,10 @@ fn unpack_entries(reader: impl Read, dest: &Path, only_in: Option<&str>, progres
     Ok(())
 }
 
-fn first_folder(path: &Path) -> Option<&str> {
-    match path.components().find(|part| !matches!(part, Component::CurDir))? {
-        Component::Normal(name) => name.to_str(),
-        _ => None,
-    }
+/// Whether an entry is `part`, inside it, or a folder on the way to it.
+fn belongs_to(entry: &Path, is_dir: bool, part: &Path) -> bool {
+    let entry: PathBuf = entry.components().filter(|piece| !matches!(piece, Component::CurDir)).collect();
+    !entry.as_os_str().is_empty() && (entry.starts_with(part) || (is_dir && part.starts_with(&entry)))
 }
 
 fn stays_inside(path: &Path) -> bool {
@@ -127,14 +158,40 @@ mod tests {
         let manual = tar_zst(&[ArchiveEntry::dir("manual"), ArchiveEntry::file("manual/index.md", b"# Voxear", 0o644)]);
         let path = dir.path().join("manual.tar.zst");
         std::fs::write(&path, &manual).unwrap();
-        unpack_module(&path, &dir.path().join("install"), "manual", &mut |_| {}).unwrap();
+        let linux = Platform::LinuxX86_64;
+        check_module(&path, Module::Manual, linux).unwrap();
+        unpack_module(&path, &dir.path().join("install"), Module::Manual, linux, &mut |_| {}).unwrap();
         assert!(dir.path().join("install/manual/index.md").is_file());
 
         let sneaky =
             tar_zst(&[ArchiveEntry::file("manual/index.md", b"x", 0o644), ArchiveEntry::file("bin/vox", b"x", 0o755)]);
         std::fs::write(&path, &sneaky).unwrap();
-        let error = unpack_module(&path, &dir.path().join("other"), "manual", &mut |_| {}).unwrap_err();
-        assert!(error.to_string().contains("isn't in its manual folder"), "{error}");
+        let error = unpack_module(&path, &dir.path().join("other"), Module::Manual, linux, &mut |_| {}).unwrap_err();
+        assert!(error.to_string().contains("may only hold manual, but it holds bin/vox"), "{error}");
+        assert!(check_module(&path, Module::Manual, linux).is_err());
+    }
+
+    #[test]
+    fn lets_the_server_add_only_its_own_file_to_bin() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("server.tar.zst");
+        let linux = Platform::LinuxX86_64;
+        let server = tar_zst(&[ArchiveEntry::dir("bin"), ArchiveEntry::file("bin/voxear-server", b"x", 0o755)]);
+        std::fs::write(&path, &server).unwrap();
+        check_module(&path, Module::Server, linux).unwrap();
+        unpack_module(&path, &dir.path().join("install"), Module::Server, linux, &mut |_| {}).unwrap();
+        assert!(dir.path().join("install/bin/voxear-server").is_file());
+
+        for sneaky in [
+            vec![ArchiveEntry::dir("bin"), ArchiveEntry::file("bin/vox", b"x", 0o755)],
+            vec![ArchiveEntry::file("bin", b"x", 0o755)],
+            vec![ArchiveEntry::dir("managed")],
+        ] {
+            std::fs::write(&path, tar_zst(&sneaky)).unwrap();
+            let error = check_module(&path, Module::Server, linux).unwrap_err();
+            assert!(error.to_string().contains("may only hold bin/voxear-server"), "{error}");
+        }
+        assert!(check_module(&path, Module::Server, Platform::WindowsX86_64).is_err(), "Windows wants the .exe");
     }
 
     #[test]

@@ -90,10 +90,26 @@ trusted comment: timestamp:1793361600	file:voxear-0.3.0-linux-x86_64.tar.zst
 …
 """
 
+[[release.download.module]]         # optional parts built for this platform
+name = "server"
+title = "Dedicated Server"
+url = "voxear-0.3.0-linux-x86_64-server.tar.zst"
+size = 9123456
+sha256 = "…"
+signature = """…"""
+
 [[release.download]]
 platform = "windows-x86_64"
 url = "voxear-0.3.0-windows-x86_64.tar.zst"
 size = 398765432
+sha256 = "…"
+signature = """…"""
+
+[[release.download.module]]
+name = "server"
+title = "Dedicated Server"
+url = "voxear-0.3.0-windows-x86_64-server.tar.zst"
+size = 8765432
 sha256 = "…"
 signature = """…"""
 
@@ -121,7 +137,8 @@ signature = """…"""
 | `download.size` | Bytes. The download stops if it exceeds this and fails if it falls short. |
 | `download.sha256` | The archive's SHA-256, in hex. |
 | `download.signature` | The archive's whole `.minisig` file. |
-| `module` | Optional parts of the release that are the same on every platform, such as the manual. Each has a `name`, which is also the folder it unpacks into, a `title` to show, and a `url`, `size`, `sha256` and `signature` like a download. A name is lowercase letters, digits and dashes, and never one of the engine's own folders (`bin`, `managed`, `templates`, `docs`). Releases from before modules existed have none; older launchers ignore them. |
+| `download.module` | Optional parts built for that platform: `server`, the Dedicated Server. Fields as for `module`. Older launchers ignore them. |
+| `module` | Optional parts of the release that are the same on every platform: `manual`, the Voxear Manual. Each has a `name`, a `title` to show, and a `url`, `size`, `sha256` and `signature` like a download. A part is listed in one place only: `manual` on the release, `server` on each download. A name the launcher doesn't know is skipped, so new parts don't break older launchers. Releases from before modules existed have none; older launchers ignore them. |
 
 Unknown fields are ignored, so new optional fields don't need a new format number.
 
@@ -207,11 +224,19 @@ templates/<id>/…            project templates, applied by `vox new`
 docs/                       offline documentation
 ```
 
-**Modules.** Optional parts ship as archives of their own, beside the platform archives:
-`voxear-<version>-<module>.tar.zst`, such as `voxear-0.3.0-manual.tar.zst`. Every entry is inside the module's
-folder (`manual/…`), and the launcher refuses one that isn't, so a module can never change the engine's files. The
-manual is the first module: the editor shows it from `<install>/manual/` when that folder exists, and leaves it
-out when it doesn't. Engine archives from before the manual became a module still carry `manual/` inside.
+**Modules.** Optional parts ship as archives of their own, beside the platform archives. Each adds one path to an
+install, and every entry in its archive must be that path, something inside it, or a folder on the way to it; the
+launcher refuses an archive with anything else, so a module can never change the engine's files.
+
+| Module | Archive | Adds |
+|---|---|---|
+| Voxear Manual (`manual`) | `voxear-<version>-manual.tar.zst`, one for every platform | `manual/…` |
+| Dedicated Server (`server`) | `voxear-<version>-<platform>-server.tar.zst`, one per platform | `bin/voxear-server[.exe]` |
+
+The editor shows the manual from `<install>/manual/` when that folder exists, and leaves it out when it doesn't.
+The Dedicated Server is the program a game's dedicated-server build ships; it never opens a window or a GPU. Without
+it, server builds use the player program instead and say to add the Dedicated Server in the launcher. Engine
+archives from before a part became a module may still carry it inside, and that copy is kept.
 
 Every engine install, including a build from source that the launcher is pointed at, has an `engine.toml` at its
 root:
@@ -271,12 +296,13 @@ install needs that folder, it is moved to the trash first.
 installed. On Windows the rename fails while the editor or a game is running from that install, and the launcher
 says so. If projects in the list are pinned to the version, `voxup uninstall` lists them and needs `--force`.
 
-**Modules.** Installing a release brings its modules too, unless they're left out: the window's checkbox,
-or `voxup install <version> --without-manual`. Each module is downloaded and checked like the engine archive, and
-unpacked into the same staging folder, so the install appears in one step with or without them. Later, a module
-can be added (`voxup manual add <version>`), unpacked into staging and renamed into place, or removed
-(`voxup manual remove <version>`), renamed into the trash and deleted. Only the launcher's own installs change
-this way; a located engine's files are left as they are.
+**Modules.** Installing a release brings its modules for this platform too, unless they're left out: the window's
+checkboxes, or `voxup install <version> --without-manual --without-server`. Each module is downloaded and checked
+like the engine archive, and unpacked into the same staging folder, so the install appears in one step with or
+without them. Later, a module can be added (`voxup manual add <version>`, `voxup server add <version>`), unpacked
+into staging and its path renamed into place, or removed (`voxup manual remove <version>`, `voxup server remove
+<version>`): its path, the `manual` folder or the one `bin/voxear-server` file, is renamed into the trash and
+deleted. Only the launcher's own installs change this way; a located engine's files are left as they are.
 
 **Located installs.** `voxup locate <folder>` records an engine that lives elsewhere, such as one built from
 source. It needs an `engine.toml` and `bin/vox`.
@@ -576,10 +602,11 @@ launcher/beta.json
 `VOXEAR_SIGNING_PASSWORD`, or it asks for them.
 
 **An engine release.** Each archive's own `engine.toml` gives the version, channel and platform. A module archive,
-which has no `engine.toml`, is known by its name, `voxear-<version>-<module>.tar.zst`, and is listed on its
-version; engine archives are listed first, so the files can come in any order. The command signs each archive
-(writing its `.minisig` beside it), lists it in the manifest with a newer `generated` time, and signs the
-manifest:
+which has no `engine.toml`, is known by its name: `voxear-<version>-manual.tar.zst` is listed on its version, and
+`voxear-<version>-<platform>-server.tar.zst` on that platform's download. Engine archives are listed first, so the
+files can come in any order, and adding an engine archive again keeps its platform's modules listed. The command
+signs each archive (writing its `.minisig` beside it), lists it in the manifest with a newer `generated` time, and
+signs the manifest:
 
 ```bash
 voxear-release engine add voxear-0.3.0-*.tar.zst --site site --key ~/.voxear-keys/engine.key --notes https://…
@@ -632,18 +659,18 @@ testing the core never needs Node.
   - A "Not pinned" chip opens the pin dialog.
   - **New project** is the primary button and **Add** the secondary one.
 - **Installs:**
-  - Each version shows its channel badge, size on disk, when it was installed, and a "Located" tag, or a
-    "Manual" tag when the manual is installed with it.
-  - The row menu adds or removes each module the release offers: "Add the Voxear Manual", or "Remove the Voxear
-    Manual" after asking. Adding one runs in the install queue, with its own progress card.
+  - Each version shows its channel badge, size on disk, when it was installed, and a "Located" tag, or a tag
+    for each module installed with it: "Manual", "Server".
+  - The row menu adds or removes each module the release offers: "Add the Voxear Manual", "Add the Dedicated
+    Server", or "Remove the …" after asking. Adding one runs in the install queue, with its own progress card.
   - Installs run one at a time from a queue (the core's lock allows only one). Each one shows as a card with
     its phase, progress and **Cancel**; a failed one offers **Try again**.
   - Uninstalling asks first and names the projects pinned to the version. Forgetting a located engine says that
     its files stay.
 - **Install a version:** a sheet with Stable, Beta and Nightly tabs, sizes, ages and release notes. A release with
-  modules has a checkbox for each, with its size, ticked by default: "Voxear Manual". It explains when
-  no release source is set, and shows the saved list, with a note, when the source can't be reached. Installing
-  from a file and locating an engine are in its footer.
+  modules has a checkbox for each, with its size, ticked by default: "Voxear Manual", "Dedicated Server". It
+  explains when no release source is set, and shows the saved list, with a note, when the source can't be reached.
+  Installing from a file and locating an engine are in its footer.
 - **New project:**
   - A template gallery. The thumbnails are line drawings in the launcher until the engine ships thumbnails of its
     own.

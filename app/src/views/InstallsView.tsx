@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
-import { api, failure, type Install } from '../api'
+import { api, failure, type Install, type ModuleName } from '../api'
 import { ChannelBadge, phaseText, ProgressBar } from '../components/Bits'
 import { Icon } from '../components/Icon'
 import { Rich } from '../components/Rich'
 import { ago, bytes, pretty } from '../lib/format'
 import { menuAt, useStore, type Job, type MenuEntry } from '../store'
 import { reveal } from './projectActions'
+
+/** The tag an install shows for each optional part it has. */
+const MODULE_TAGS: Record<ModuleName, string> = { manual: 'Manual', server: 'Server' }
 
 export function InstallsView() {
   const installs = useStore((s) => s.installs)
@@ -152,11 +155,13 @@ function InstallRow({ install, index, size, home }: { install: Install; index: n
         ) : install.located ? (
           <span className="tag">Located</span>
         ) : (
-          install.modules.some((module) => module.name === 'manual' && module.installed) && (
-            <span className="tag" title="The Voxear Manual is installed with this version">
-              Manual
-            </span>
-          )
+          install.modules
+            .filter((module) => module.installed)
+            .map((module) => (
+              <span key={module.name} className="tag" title={module.title}>
+                {MODULE_TAGS[module.name]}
+              </span>
+            ))
         )}
       </div>
       <span className="cell cell-size row-meta">{size !== undefined ? bytes(size) : ''}</span>
@@ -172,7 +177,7 @@ function InstallRow({ install, index, size, home }: { install: Install; index: n
   )
 }
 
-/** Add or remove each optional module, such as the manual. A located engine's files are never changed. */
+/** Add or remove each optional part, such as the manual. A located engine's files are never changed. */
 function moduleEntries(install: Install): MenuEntry[] {
   if (install.located || install.missing) return []
   const entries: MenuEntry[] = []
@@ -190,7 +195,7 @@ function moduleEntries(install: Install): MenuEntry[] {
   return entries.length ? ['divider', ...entries] : []
 }
 
-async function removeModule(install: Install, name: string, title: string) {
+async function removeModule(install: Install, name: ModuleName, title: string) {
   const store = useStore.getState()
   const ok = await store.confirm({
     title: `Remove the ${title}?`,

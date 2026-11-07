@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, type Release, type ReleaseChannel } from '../api'
+import { api, type ModuleName, type Release, type ReleaseChannel } from '../api'
 import { Icon } from '../components/Icon'
 import { Rich } from '../components/Rich'
 import { ago, bytes } from '../lib/format'
@@ -124,8 +124,8 @@ export function InstallSheet() {
 function ReleaseRow({ release }: { release: Release }) {
   const job = useStore((s) => s.jobs.find((j) => j.key === release.version && j.state !== 'failed'))
   const queueInstall = useStore((s) => s.queueInstall)
-  // Optional modules, such as the manual, come along unless they're unticked.
-  const [without, setWithout] = useState<string[]>([])
+  // Optional parts, such as the manual and the Dedicated Server, come along unless they're unticked.
+  const [without, setWithout] = useState<ModuleName[]>([])
   const offered = !release.installed && !release.needsNewerLauncher && release.modules.length > 0
   return (
     <div className="release">
