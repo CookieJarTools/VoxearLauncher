@@ -30,4 +30,7 @@ replace "$root/app/src-tauri/Cargo.toml" '^version = "[^"]*"$' "version = \"$ver
 replace "$root/app/src-tauri/tauri.conf.json" '^  "version": "[^"]*",$' "  \"version\": \"$version\","
 # package.json and its lock file.
 (cd "$root/app" && npm version "$version" --no-git-tag-version --allow-same-version >/dev/null)
+# Both lock files name the workspace's own crates with their versions; cargo rewrites those lines offline.
+(cd "$root" && cargo metadata --offline --format-version 1 >/dev/null)
+(cd "$root/app/src-tauri" && cargo metadata --offline --format-version 1 >/dev/null)
 echo "The launcher is now version $version."
