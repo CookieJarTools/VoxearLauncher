@@ -1,0 +1,82 @@
+# Builds the launcher's installers on both platforms and keeps them as workflow artifacts. Publishing stays a
+# manual step (docs/INSTALLING.md, "Making a release"), so nothing here uploads a release.
+#
+# Secrets, for signed builds that can update themselves:
+#   LAUNCHER_UPDATE_KEY            the launcher update key (the private key file's contents)
+#   LAUNCHER_UPDATE_KEY_PASSWORD   its password
+# Variable:
+#   LAUNCHER_UPDATE_PUBLIC_KEY     its public key, until it is built into self_update::LAUNCHER_UPDATE_KEY
+name: Installers
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["launcher-v*"]
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest supported Ubuntu, so the AppImage runs on distros as old as its glibc.
+          - name: Linux
+            os: ubuntu-22.04
+          - name: Windows
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.LAUNCHER_UPDATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.LAUNCHER_UPDATE_KEY_PASSWORD }}
+      VOXEAR_LAUNCHER_UPDATE_KEY: ${{ vars.LAUNCHER_UPDATE_PUBLIC_KEY }}
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Rust
+        shell: bash
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: System packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf file libfuse2
+
+      - name: Front end
+        working-directory: app
+        run: npm ci
+
+      - name: Tests
+        shell: bash
+        run: |
+          cargo test --workspace
+          (cd app && npm run build)
+          (cd app/src-tauri && cargo test)
+
+      - name: Installers
+        shell: bash
+        run: scripts/build-installers.sh
+
+      - name: Check the AppImage
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: |
+          appimage=$(ls out/*.AppImage)
+          chmod +x "$appimage"
+          "$appimage" --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: launcher-${{ matrix.name }}
+          path: out/
+          if-no-files-found: error
