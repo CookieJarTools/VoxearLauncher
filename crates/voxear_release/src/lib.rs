@@ -451,7 +451,14 @@ pub fn add_launcher(site: &Path, file: &Path, build: &LauncherBuild, signature: 
     if build.notes.is_some() {
         manifest.notes = build.notes.clone();
     }
-    manifest.platforms.insert(build.target.clone(), PlatformUpdate { signature, url: format!("{base}/{tag}/{name}") });
+    let bytes = fs::read(file).with_context(|| format!("couldn't read {}", file.display()))?;
+    let entry = PlatformUpdate {
+        signature,
+        url: format!("{base}/{tag}/{name}"),
+        sha256: Some(hex(&Sha256::digest(&bytes))),
+        size: Some(bytes.len() as u64),
+    };
+    manifest.platforms.insert(build.target.clone(), entry);
     fs::create_dir_all(path.parent().expect("the manifest is in a folder"))?;
     fs::write(&path, manifest.to_json()?).with_context(|| format!("couldn't write {}", path.display()))?;
     Ok(path)
@@ -626,7 +633,11 @@ mod tests {
         build.version = Version::new(0, 2, 0);
         let path = add_launcher(&fixture.site, &bundle, &build, LauncherSignature::TauriSig(&sig)).unwrap();
         let manifest = UpdateManifest::parse(&fs::read_to_string(path).unwrap()).unwrap();
-        assert!(manifest.platforms["linux-x86_64"].url.ends_with("/launcher-v0.2.0/Launcher.AppImage"));
+        let entry = &manifest.platforms["linux-x86_64"];
+        assert!(entry.url.ends_with("/launcher-v0.2.0/Launcher.AppImage"));
+        assert_eq!(entry.size, Some(8));
+        assert_eq!(entry.sha256.as_deref(), Some(hex(&Sha256::digest(b"appimage")).as_str()));
+        entry.check_bytes(b"appimage").unwrap();
     }
 
     #[test]

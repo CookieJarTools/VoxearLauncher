@@ -1,5 +1,6 @@
 //! Reads manifests and downloads from `https://` URLs or from local files (`file://` URLs and plain paths), so
-//! a release mirror, an offline folder and the tests all go through the same code.
+//! a release mirror, an offline folder and the tests all go through the same code. Plain `http://` is allowed for
+//! this machine only (`localhost`, `127.0.0.1`, `[::1]`), for trying releases served from a local folder.
 
 use std::fmt;
 use std::fs::File;
@@ -48,7 +49,7 @@ pub fn open(source: &str) -> Result<Fetched> {
             let len = file.metadata().ok().map(|meta| meta.len());
             Ok(Fetched { reader: Box::new(file), len })
         }
-        Source::Https(url) => {
+        Source::Web(url) => {
             let response = match agent().get(&url).call() {
                 Ok(response) => response,
                 Err(ureq::Error::StatusCode(404)) => return Err(NotFound(url).into()),
@@ -87,7 +88,7 @@ pub fn resolve(base: &str, url: &str) -> String {
 
 enum Source {
     File(PathBuf),
-    Https(String),
+    Web(String),
 }
 
 impl Source {
@@ -95,10 +96,32 @@ impl Source {
         match source.split_once("://") {
             None => Ok(Source::File(PathBuf::from(source))),
             Some(("file", rest)) => Ok(Source::File(file_url_path(rest))),
-            Some(("https", _)) => Ok(Source::Https(source.to_owned())),
+            Some(("https", _)) => Ok(Source::Web(source.to_owned())),
+            Some(("http", _)) if is_loopback(source) => Ok(Source::Web(source.to_owned())),
             Some(_) => bail!("{source}: only https:// URLs and local files are supported"),
         }
     }
+}
+
+/// Checks that `url` is one the launcher downloads from: `https://`, or `http://` on this machine.
+pub fn check_web_url(url: &str) -> Result<()> {
+    match url.split_once("://") {
+        Some(("https", _)) => Ok(()),
+        Some(("http", _)) if is_loopback(url) => Ok(()),
+        _ => bail!("{url}: only https:// URLs are supported"),
+    }
+}
+
+/// Whether an `http://` or `https://` URL points at this machine.
+pub fn is_loopback(url: &str) -> bool {
+    let Some((_, rest)) = url.split_once("://") else { return false };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let host = match host.strip_prefix('[') {
+        Some(bracketed) => bracketed.split_once(']').map_or(bracketed, |(host, _)| host),
+        None => host.split(':').next().unwrap_or_default(),
+    };
+    matches!(host.to_ascii_lowercase().as_str(), "localhost" | "127.0.0.1" | "::1")
 }
 
 /// The path in a `file://` URL. `file:///C:/x` on Windows is `C:/x`.
@@ -142,6 +165,52 @@ mod tests {
     fn refuses_plain_http() {
         let error = open("http://example.invalid/releases.toml").err().unwrap();
         assert!(error.to_string().contains("only https://"), "{error}");
+        // A host that only starts like a loopback one is still somewhere else.
+        assert!(open("http://127.0.0.1.example.invalid/releases.toml").is_err());
+        assert!(open("http://localhost@example.invalid/releases.toml").is_err());
+    }
+
+    #[test]
+    fn allows_plain_http_on_this_machine_only() {
+        assert!(is_loopback("http://127.0.0.1:8080/launcher/stable.json"));
+        assert!(is_loopback("http://localhost/stable.json"));
+        assert!(is_loopback("http://[::1]:9000/stable.json"));
+        assert!(is_loopback("http://user@127.0.0.1:9000/stable.json"));
+        assert!(!is_loopback("http://127.0.0.1.example.invalid/stable.json"));
+        assert!(!is_loopback("http://localhost@example.invalid/stable.json"));
+        assert!(!is_loopback("http://10.0.0.1/stable.json"));
+        assert!(!is_loopback("/srv/stable.json"));
+        check_web_url("https://example.invalid/a").unwrap();
+        check_web_url("http://127.0.0.1:8080/a").unwrap();
+        assert!(check_web_url("http://example.invalid/a").is_err());
+        assert!(check_web_url("ftp://127.0.0.1/a").is_err());
+    }
+
+    #[test]
+    fn reads_over_http_from_this_machine() {
+        let url = serve_once(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello");
+        assert_eq!(read(&url, 100).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn a_download_cut_off_part_way_is_an_error() {
+        // The server promises 100 bytes, sends 5 and hangs up.
+        let url = serve_once(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\nhello");
+        assert!(read(&url, 1000).is_err());
+    }
+
+    /// Answers one request on a loopback port with `response`, then closes the connection.
+    fn serve_once(response: &'static [u8]) -> String {
+        use std::io::Write;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 4096];
+            _ = stream.read(&mut request);
+            _ = stream.write_all(response);
+        });
+        format!("http://127.0.0.1:{port}/file")
     }
 
     #[test]

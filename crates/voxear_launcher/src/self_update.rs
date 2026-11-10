@@ -7,12 +7,16 @@
 //!
 //! Signatures are minisign, base64-encoded the way Tauri writes them, and are made with the launcher update key,
 //! not the engine release key. Their trusted comment must name the version the manifest announces: the
-//! manifest itself isn't signed, so this is what stops an old build being offered as a new one.
+//! manifest itself isn't signed, so this is what stops an old build being offered as a new one. Each download
+//! may also list its size and SHA-256, which are checked first, so a download that was cut short says so.
+//!
+//! Nothing is replaced until every check has passed, so a failed or cut-off download leaves the installed
+//! launcher as it was.
 
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::path::Path;
 use std::str::FromStr;
 
@@ -21,11 +25,13 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use semver::Version;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::fetch;
 use crate::fsutil;
 use crate::platform::Platform;
 use crate::signing::TrustedKeys;
+use crate::store::hex;
 
 /// Where the launcher's update manifests are published.
 pub const UPDATES_BASE: &str = "https://cookiejartools.github.io/VoxearReleases/launcher";
@@ -98,6 +104,61 @@ pub struct PlatformUpdate {
     pub signature: String,
     /// Absolute, or relative to the manifest.
     pub url: String,
+    /// The artifact's SHA-256, in lowercase hex. Tauri's updater ignores it; the launcher checks it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    /// The artifact's size in bytes, checked like `sha256`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+}
+
+impl PlatformUpdate {
+    /// Checks a downloaded artifact against the size and SHA-256 the manifest lists, where it lists them.
+    pub fn check_bytes(&self, bytes: &[u8]) -> Result<()> {
+        self.check(bytes.len() as u64, || Ok(hex(&Sha256::digest(bytes))))
+    }
+
+    /// [`PlatformUpdate::check_bytes`] for a file on disk.
+    pub fn check_file(&self, path: &Path) -> Result<()> {
+        let len = fs::metadata(path).with_context(|| format!("couldn't read {}", path.display()))?.len();
+        self.check(len, || {
+            let mut reader = BufReader::new(File::open(path)?);
+            let mut hasher = Sha256::new();
+            let mut buffer = vec![0u8; 256 * 1024];
+            loop {
+                let read = reader.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..read]);
+            }
+            Ok(hex(&hasher.finalize()))
+        })
+    }
+
+    fn check(&self, len: u64, digest: impl FnOnce() -> Result<String>) -> Result<()> {
+        if let Some(size) = self.size {
+            ensure!(
+                len == size,
+                "the update download is {len} bytes, but the release lists {size}; it was cut short or changed, so it \
+                 was thrown away"
+            );
+        }
+        if let Some(expected) = &self.sha256 {
+            let actual = digest().context("couldn't check the update download")?;
+            ensure!(
+                actual.eq_ignore_ascii_case(expected.trim()),
+                "the update download's SHA-256 doesn't match the release's, so it was thrown away"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Whether `available` should replace `current`. Versions are semver, so a beta of a version comes before
+/// the version itself (`0.2.0-beta.1` < `0.2.0`), and build metadata after a `+` doesn't count.
+pub fn is_newer(available: &Version, current: &Version) -> bool {
+    available.cmp_precedence(current).is_gt()
 }
 
 impl UpdateManifest {
@@ -193,7 +254,7 @@ pub fn update_voxup(
     progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<VoxupUpdate> {
     let Some(manifest) = fetch_manifest(url)? else { return Ok(VoxupUpdate::NothingPublished) };
-    if &manifest.version <= current {
+    if !is_newer(&manifest.version, current) {
         return Ok(VoxupUpdate::UpToDate(current.clone()));
     }
     let target = voxup_target(platform);
@@ -205,6 +266,7 @@ pub fn update_voxup(
     let download = fsutil::unique_sibling(exe, "update");
     let result = (|| {
         download_to(&fetch::resolve(url, &entry.url), &download, progress)?;
+        entry.check_file(&download)?;
         verify_artifact(&download, &entry.signature, &manifest.version, key)?;
         make_executable(&download)?;
         replace_exe(exe, &download)
@@ -299,10 +361,21 @@ mod tests {
             let comment = format!("timestamp:1793380000\tfile:voxup\tversion:{signed_as}");
             let signature = STANDARD.encode(self.key.sign_with_comment(binary, &comment));
             let mut platforms = BTreeMap::new();
-            platforms.insert(voxup_target(platform), PlatformUpdate { signature, url: "voxup-new".to_owned() });
+            let entry = PlatformUpdate {
+                signature,
+                url: "voxup-new".to_owned(),
+                sha256: Some(hex(&Sha256::digest(binary))),
+                size: Some(binary.len() as u64),
+            };
+            platforms.insert(voxup_target(platform), entry);
             platforms.insert(
                 "linux-x86_64".to_owned(),
-                PlatformUpdate { signature: "for the window".to_owned(), url: "Launcher.AppImage".to_owned() },
+                PlatformUpdate {
+                    signature: "for the window".to_owned(),
+                    url: "Launcher.AppImage".to_owned(),
+                    sha256: None,
+                    size: None,
+                },
             );
             let manifest = UpdateManifest {
                 version: Version::parse(version).unwrap(),
@@ -346,7 +419,36 @@ mod tests {
         let manifest = UpdateManifest::parse(text).unwrap();
         assert_eq!(manifest.version, Version::new(0, 2, 0));
         assert_eq!(manifest.platforms.len(), 2);
+        assert_eq!(manifest.platforms["linux-x86_64"].sha256, None);
         assert_eq!(UpdateManifest::parse(&manifest.to_json().unwrap()).unwrap(), manifest);
+    }
+
+    #[test]
+    fn reads_sizes_and_hashes_beside_tauris_fields() {
+        let text = r#"{
+            "version": "0.2.0",
+            "platforms": {
+                "linux-x86_64": {
+                    "signature": "c2ln",
+                    "url": "https://example.invalid/VoxearLauncher_0.2.0_amd64.AppImage",
+                    "sha256": "ab12",
+                    "size": 1234
+                }
+            }
+        }"#;
+        let manifest = UpdateManifest::parse(text).unwrap();
+        let entry = &manifest.platforms["linux-x86_64"];
+        assert_eq!((entry.sha256.as_deref(), entry.size), (Some("ab12"), Some(1234)));
+        let written = manifest.to_json().unwrap();
+        assert!(written.contains("\"sha256\": \"ab12\""), "{written}");
+        assert!(!written.contains("notes"), "fields that aren't set are left out: {written}");
+    }
+
+    #[test]
+    fn refuses_a_manifest_that_isnt_one() {
+        assert!(UpdateManifest::parse("{}").is_err());
+        assert!(UpdateManifest::parse(r#"{"version": "two", "platforms": {}}"#).is_err());
+        assert!(UpdateManifest::parse("<html>Not found</html>").is_err());
     }
 
     #[test]
@@ -362,6 +464,59 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(fs::metadata(&exe).unwrap().permissions().mode() & 0o111, 0o111);
         }
+    }
+
+    #[test]
+    fn a_cut_off_download_leaves_voxup_as_it_was() {
+        let fixture = Fixture::new();
+        let url = fixture.publish("0.2.0", "0.2.0", b"new voxup");
+        // The file on the server is shorter than the manifest says, as when a download stops part way.
+        fs::write(fixture.dir.path().join("site").join("voxup-new"), b"new vo").unwrap();
+        let exe = fixture.installed_voxup();
+        let error = fixture.update(&url, &exe).unwrap_err();
+        assert!(format!("{error:#}").contains("cut short"), "{error:#}");
+        assert_eq!(fs::read(&exe).unwrap(), b"old voxup");
+        let leftovers = fs::read_dir(exe.parent().unwrap()).unwrap().count();
+        assert_eq!(leftovers, 1, "the partial download was cleaned up");
+    }
+
+    #[test]
+    fn checks_the_size_and_hash_a_manifest_lists() {
+        let entry = PlatformUpdate {
+            signature: String::new(),
+            url: String::new(),
+            sha256: Some(hex(&Sha256::digest(b"launcher 0.2.0"))),
+            size: Some(14),
+        };
+        entry.check_bytes(b"launcher 0.2.0").unwrap();
+        let short = entry.check_bytes(b"launcher").unwrap_err();
+        assert!(short.to_string().contains("cut short"), "{short}");
+        let changed = entry.check_bytes(b"launcher 0.2.X").unwrap_err();
+        assert!(changed.to_string().contains("SHA-256"), "{changed}");
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("download");
+        fs::write(&file, b"launcher 0.2.0").unwrap();
+        entry.check_file(&file).unwrap();
+        fs::write(&file, b"launcher 0.2.X").unwrap();
+        assert!(entry.check_file(&file).is_err());
+
+        // A manifest from before sizes and hashes were listed is checked by its signature alone.
+        let bare = PlatformUpdate { sha256: None, size: None, ..entry };
+        bare.check_bytes(b"anything").unwrap();
+    }
+
+    #[test]
+    fn compares_versions_as_semver() {
+        let v = |text: &str| Version::parse(text).unwrap();
+        assert!(is_newer(&v("0.2.0"), &v("0.1.0")));
+        assert!(is_newer(&v("0.10.0"), &v("0.9.0")), "numbers compare as numbers, not text");
+        assert!(is_newer(&v("0.2.0"), &v("0.2.0-beta.3")), "a version comes after its betas");
+        assert!(is_newer(&v("0.2.0-beta.10"), &v("0.2.0-beta.9")));
+        assert!(!is_newer(&v("0.2.0-beta.1"), &v("0.2.0")));
+        assert!(!is_newer(&v("0.2.0"), &v("0.2.0")));
+        assert!(!is_newer(&v("0.1.9"), &v("0.2.0")), "never offers an older version");
+        assert!(!is_newer(&v("0.2.0+linux"), &v("0.2.0")), "build metadata doesn't make a version newer");
     }
 
     #[test]
