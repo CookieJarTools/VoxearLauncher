@@ -147,6 +147,13 @@ export function SettingsView() {
               <dt>Platform</dt>
               <dd>{info?.platform}</dd>
               <span />
+              {info?.appMenu.kind === 'installed' && (
+                <>
+                  <dt>Installed at</dt>
+                  <dd title={info.appMenu.path}>{pretty(info.appMenu.path, info.userHome)}</dd>
+                  <span />
+                </>
+              )}
               <dt>Launcher folder</dt>
               <dd title={info?.home}>{info ? pretty(info.home, info.userHome) : ''}</dd>
               <button className="btn btn-sm btn-ghost" onClick={() => info && void reveal(info.home)}>

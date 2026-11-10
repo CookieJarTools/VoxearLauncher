@@ -16,7 +16,11 @@ export interface AppInfo {
   userHome: string
   settingsFile: string
   defaultLocation: string
+  /** On Linux, whether this copy is the one in the app menu. */
+  appMenu: AppMenu
 }
+
+export type AppMenu = { kind: 'installed'; path: string } | { kind: 'notInstalled' } | { kind: 'notApplicable' }
 
 export interface Install {
   version: string
@@ -217,6 +221,8 @@ export interface Api {
   checkLauncherUpdate(): Promise<UpdateStatus>
   installLauncherUpdate(onProgress: (progress: { done: number; total: number | null }) => void): Promise<void>
   restartLauncher(): Promise<void>
+  /** Copies this AppImage into the app menu, then reopens the launcher from there. */
+  installLauncherApp(): Promise<void>
   pickFolder(title: string, defaultPath?: string): Promise<string | null>
   pickFile(title: string, name: string, extensions: string[]): Promise<string | null>
   reveal(path: string): Promise<void>
@@ -265,6 +271,7 @@ const tauriApi: Api = {
   checkLauncherUpdate: () => invoke('check_launcher_update'),
   installLauncherUpdate: (onProgress) => invoke('install_launcher_update', { onProgress: channel(onProgress) }),
   restartLauncher: () => invoke('restart_launcher'),
+  installLauncherApp: () => invoke('install_launcher_app'),
   pickFolder: async (title, defaultPath) => {
     const picked = await open({ directory: true, title, defaultPath })
     return typeof picked === 'string' ? picked : null

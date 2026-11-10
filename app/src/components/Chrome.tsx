@@ -1,4 +1,5 @@
-import { api } from '../api'
+import { useState } from 'react'
+import { api, failure } from '../api'
 import { useStore, type View } from '../store'
 import { phaseText, ProgressBar } from './Bits'
 import { Icon, Logo, type IconName } from './Icon'
@@ -75,6 +76,7 @@ export function Sidebar() {
           <span className="hint">{phaseText(running.progress, false).split(' · ')[0]}</span>
         </button>
       )}
+      <InstallCard />
       <UpdateCard />
       <button className={`nav-item ${view === 'settings' ? 'active' : ''}`} onClick={() => setView('settings')} title="Settings (Ctrl ,)">
         <Icon name="settings" size={16} />
@@ -82,6 +84,39 @@ export function Sidebar() {
       </button>
       <div className="sidebar-foot">Launcher {version ?? ''}</div>
     </nav>
+  )
+}
+
+/** On Linux, when the AppImage runs from where it was downloaded: Install puts it in the app menu. */
+function InstallCard() {
+  const menu = useStore((s) => s.info?.appMenu)
+  const toast = useStore((s) => s.toast)
+  const [state, setState] = useState<'shown' | 'installing' | 'hidden'>('shown')
+  if (menu?.kind !== 'notInstalled' || state === 'hidden') return null
+
+  const install = async () => {
+    setState('installing')
+    try {
+      await api.installLauncherApp()
+    } catch (error) {
+      setState('shown')
+      toast('error', failure(error).message)
+    }
+  }
+  return (
+    <div className="job-mini update-card">
+      <div className="job-mini-title">
+        <span>Not in the app menu</span>
+      </div>
+      <div className="input-row">
+        <button className="btn btn-sm btn-primary" disabled={state === 'installing'} onClick={() => void install()}>
+          {state === 'installing' ? 'Installing…' : 'Install'}
+        </button>
+        <button className="btn btn-sm btn-ghost" disabled={state === 'installing'} onClick={() => setState('hidden')}>
+          Not now
+        </button>
+      </div>
+    </div>
   )
 }
 

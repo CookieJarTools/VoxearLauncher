@@ -78,6 +78,15 @@ fn describes_the_app() {
     for key in ["version", "platform", "home", "userHome", "settingsFile", "defaultLocation"] {
         assert!(info[key].is_string(), "app_info has {key}: {info}");
     }
+    // The test binary isn't an AppImage, so there's nothing to put in the app menu.
+    assert_eq!(info["appMenu"], json!({ "kind": "notApplicable" }), "{info}");
+}
+
+#[test]
+fn installing_into_the_app_menu_needs_the_appimage() {
+    let fixture = Fixture::new();
+    let error = fixture.call("install_launcher_app", json!({})).unwrap_err();
+    assert!(error["message"].as_str().unwrap().contains("AppImage"), "{error}");
 }
 
 #[test]

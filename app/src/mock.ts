@@ -125,7 +125,8 @@ export const mockApi: Api = {
     home: `${home}/.local/share/voxear`,
     userHome: home,
     settingsFile: `${home}/.local/share/voxear/settings.toml`,
-    defaultLocation: settings.project_location ?? `${home}/VoxearProjects`
+    defaultLocation: settings.project_location ?? `${home}/VoxearProjects`,
+    appMenu: { kind: 'notInstalled' }
   }),
   listInstalls: async (): Promise<Install[]> =>
     installs.map((install) => {
@@ -288,6 +289,10 @@ export const mockApi: Api = {
     }
   },
   restartLauncher: async () => void location.reload(),
+  installLauncherApp: async () => {
+    await wait(400)
+    location.reload()
+  },
   getSettings: async () => ({ ...settings }),
   saveSettings: async (next) => void (settings = { ...next }),
   pickFolder: async (_title, defaultPath) => window.prompt('Folder', defaultPath ?? home),

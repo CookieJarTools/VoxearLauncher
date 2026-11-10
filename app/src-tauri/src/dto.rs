@@ -34,6 +34,29 @@ pub struct AppInfo {
     pub user_home: String,
     pub settings_file: String,
     pub default_location: String,
+    pub app_menu: AppMenuDto,
+}
+
+/// Whether the launcher is in the app menu, on Linux.
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum AppMenuDto {
+    /// This is the installed copy, at `path`.
+    Installed { path: String },
+    /// An AppImage that can be installed.
+    NotInstalled,
+    /// Nothing to install here: Windows, or a copy that isn't an AppImage.
+    NotApplicable,
+}
+
+impl From<crate::updates::AppMenu> for AppMenuDto {
+    fn from(menu: crate::updates::AppMenu) -> Self {
+        match menu {
+            crate::updates::AppMenu::Installed(path) => AppMenuDto::Installed { path: path.display().to_string() },
+            crate::updates::AppMenu::NotInstalled => AppMenuDto::NotInstalled,
+            crate::updates::AppMenu::NotApplicable => AppMenuDto::NotApplicable,
+        }
+    }
 }
 
 #[derive(Serialize)]
