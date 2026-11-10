@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react'
 
-/** Stroke icons on a 24px grid, in the same style as the other CookieJar apps. */
+/** Stroke icons on a 24px grid. */
 const PATHS = {
   folder: 'M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z',
   folderOpen: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1M3 7v10a2 2 0 0 0 2 2h12l4-8H7l-4 8',

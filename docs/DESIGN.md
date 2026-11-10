@@ -1,8 +1,8 @@
 # Voxear Launcher design
 
-The Voxear Launcher is the equivalent of Unity Hub for the [Voxear](https://github.com/CookieJarTools/Voxear)
-engine. It installs engine versions side by side, keeps itself up to date, lists projects and opens each one with
-the engine version it is pinned to, and creates new projects from templates.
+The Voxear Launcher is the desktop app for the [Voxear](https://github.com/CookieJarTools/Voxear) engine. It
+installs engine versions side by side, keeps itself up to date, lists projects and opens each one with the engine
+version it is pinned to, and creates new projects from templates.
 
 This document defines the formats the launcher and the engine share: the release manifest, the install layout, the
 project pin and the `vox new` contract. The engine's side of the contract is summarised in "Versions, installs
@@ -13,14 +13,14 @@ and the launcher" in the engine's `docs/ARCHITECTURE.md`; this document is the d
 Settled on 2026-10-30:
 
 - **Repository:** `CookieJarTools/VoxearLauncher`, private, next to the engine.
-- **UI:** a Rust core with a web UI through **Tauri 2**, the same stack as Whisk (React 19, Vite, TypeScript).
+- **UI:** a Rust core with a web UI through **Tauri 2** (React 19, Vite, TypeScript).
   - It ships before engine milestone M3, which is when the first engine release needs installing.
-  - The Linear look, OKLCH themes and short animations are cheap in CSS.
+  - The look, OKLCH themes and short animations are cheap in CSS.
   - It still opens on a machine whose GPU lacks Vulkan 1.3, so it can explain what is missing.
   - The second UI stack is confined to this one app. The core has no UI in it, so the front end could move to
     Voxear UI later without touching the logic.
-- **Command line:** `voxup`. It is short, like `rustup`, which also installs toolchains side by side with
-  stable, beta and nightly channels.
+- **Command line:** `voxup`, short to type. It installs engine versions side by side, from stable, beta and
+  nightly channels.
 - **Licence:** PolyForm Shield 1.0.0, the same as the engine.
 - **Hosting:** a public `CookieJarTools/VoxearReleases` repository. Archives and launcher builds are its release
   assets, and the manifests are on its GitHub Pages site (see "Publishing releases").
@@ -329,8 +329,8 @@ engine = "0.3.0"
 scripts = "Scripts/Orbit.Scripts.csproj"
 ```
 
-`engine` is an exact semver version, never a range, like Unity's `ProjectVersion.txt`. `vox new` writes it with its
-own version. A project without it, such as `samples/Hello` today, shows as "not pinned".
+`engine` is an exact semver version, never a range, so a project always opens with the version it was made for.
+`vox new` writes it with its own version. A project without it, such as `samples/Hello` today, shows as "not pinned".
 
 **The list.** `projects.toml` records where projects are, when they were added and opened, and which are
 favourites. The name and engine version are read from each `voxear.toml` whenever the list is shown, so the list
@@ -522,11 +522,22 @@ The launcher adds the new project to the list, shows each step as it arrives, an
 
 The launcher updates itself from **its own manifest, signed with its own key**, separately from engine versions.
 
-**Packaging.**
-- Linux: an AppImage, the only Linux format Tauri's updater can replace in place. A copy installed any other way
-  (a `.deb`, or later an AUR package) says that it should be updated the way it was installed.
-- Windows: a per-user NSIS installer, so no admin rights are needed. The updater runs the new installer in passive
-  mode after the launcher closes.
+**Packaging.** How to install, update and uninstall is in [INSTALLING.md](INSTALLING.md); this is how it works.
+- Linux: an AppImage, the only Linux format Tauri's updater can replace in place, so it runs on any distro.
+  - `--install`, or **Install** on the sidebar card an uninstalled AppImage shows, puts it in the app menu
+    (`voxear_launcher::self_install`). It copies the AppImage to `~/.local/bin/voxear-launcher` with one
+    rename, writes `voxear-launcher.desktop` to `~/.local/share/applications` and the icons to
+    `~/.local/share/icons/hicolor`. The window then closes and reopens from the installed copy, once the old one
+    has let go of the single-instance lock.
+  - `--uninstall` removes those three and keeps the launcher folder.
+  - A copy installed any other way (a `.deb`, or later an AUR package) says that it should be updated the way it
+    was installed.
+- Windows: a per-user NSIS setup program, so no admin rights are needed. It installs to
+  `%LOCALAPPDATA%\Voxear Launcher`, and adds a Start menu shortcut, a desktop shortcut (a box on its last page)
+  and an uninstall entry in Settings › Apps. The updater runs the new setup program in passive mode after the
+  launcher closes, and the setup starts the launcher again.
+- The launcher folder (engines, projects, settings) is apart from the program on both, so updates and uninstalls
+  leave it alone.
 
 **Manifest.** One static JSON file per channel, in the format Tauri's updater reads:
 `https://cookiejartools.github.io/VoxearReleases/launcher/stable.json`, and `beta.json`. `VOXUP_LAUNCHER_UPDATES`
@@ -538,15 +549,26 @@ points the launcher at another folder or URL.
   "notes": "What changed, in Markdown",
   "pub_date": "2026-11-15T12:00:00Z",
   "platforms": {
-    "linux-x86_64": { "url": "https://…/VoxearLauncher_0.2.0_amd64.AppImage", "signature": "<base64 of the .sig>" },
-    "windows-x86_64": { "url": "https://…/VoxearLauncher_0.2.0_x64-setup.exe", "signature": "…" },
-    "voxup-linux-x86_64": { "url": "https://…/voxup", "signature": "…" }
+    "linux-x86_64": {
+      "url": "https://…/Voxear.Launcher_0.2.0_amd64.AppImage",
+      "signature": "<base64 of the .sig>",
+      "sha256": "<hex>",
+      "size": 84123456
+    },
+    "windows-x86_64": { "url": "https://…/Voxear.Launcher_0.2.0_x64-setup.exe", "signature": "…", "sha256": "…", "size": 5123456 },
+    "voxup-linux-x86_64": { "url": "https://…/voxup", "signature": "…", "sha256": "…", "size": 9123456 }
   }
 }
 ```
 
 - The `voxup-<platform>` entries are standalone `voxup` builds. Tauri's updater ignores them.
 - Signatures are minisign signatures, base64-encoded as Tauri writes them.
+- `sha256` and `size` are the launcher's own fields, which Tauri's updater ignores. Both the window and `voxup`
+  check them, so a download cut short says so, rather than failing its signature check. A manifest without them
+  is checked by signature alone.
+- URLs are `https://`. Plain `http://` is accepted only for this machine (`localhost`, `127.0.0.1`, `[::1]`), for
+  trying an update from a local folder. The launcher checks both the manifest's URL and each download's itself, so
+  Tauri's own `http://` refusal is switched off (`dangerousInsecureTransportProtocol`).
 - **The signed version must match.** The manifest itself isn't signed, so each signature's trusted comment carries
   `version:<version>` and must equal the version the manifest announces. Otherwise an old build could be offered
   as a new one. The window turns on Tauri's `requireSignedVersion` for this, and `voxup` checks the same way.
@@ -563,9 +585,13 @@ points the launcher at another folder or URL.
 - It checks when it opens and every six hours while it's open, quietly. The launcher reads the manifest itself
   first, so "nothing published yet" and "up to date" aren't reported as failures; Tauri's updater then fetches and
   checks the update.
-- When there's a newer version, a card in the sidebar shows it with its notes and **Update**. That downloads,
-  verifies and installs the update with progress, and then the card offers **Restart now**. Restart waits while
-  an engine install or a project upgrade is running.
+- When there's a newer version, a card in the sidebar shows it with its notes and **Update**. That downloads the
+  update into memory, checks its size, SHA-256 and signature, and only then installs it, with progress. Until
+  then nothing on disk has changed, so a failed or cut-off download leaves the launcher as it was. The card then
+  offers **Restart now**, which waits while an engine install or a project upgrade is running. The restart is an
+  exit request, so plugins let go of the single-instance lock before the new copy starts.
+- `voxear-launcher --update` runs the same check and install from a terminal, with no window: Tauri starts with
+  its window list emptied, updates and exits.
 - Settings › Launcher updates has the channel (Stable or Beta, saved at once), **Check now**, and what the last
   check found. Development builds, and copies that weren't installed from the AppImage or the installer, say why
   they don't update themselves.
@@ -616,16 +642,14 @@ Then upload the archives and their `.minisig` files to the `engine-v0.3.0` relea
 `engine yank <version>` pulls a release (`--undo` puts it back), and `engine prune --keep 30` drops old
 nightlies.
 
-**A launcher release.** Bundle the window with signing on:
+**A launcher release.** "Making a release" in [INSTALLING.md](INSTALLING.md) has the steps.
+`scripts/set-version.sh` sets the version in the four files that hold it, and `scripts/build-installers.sh`
+bundles the window with signing on when `TAURI_SIGNING_PRIVATE_KEY` is set, gathering each installer and its
+`.sig` in `out/`. The Installers workflow does the same on Linux and Windows. List each installer, and the
+standalone `voxup` builds, in a channel:
 
 ```bash
-TAURI_SIGNING_PRIVATE_KEY=… npm run tauri build -- --config src-tauri/tauri.release.conf.json
-```
-
-That writes each bundle's `.sig`. List each bundle, and the standalone `voxup` builds, in a channel:
-
-```bash
-voxear-release launcher add Voxear.Launcher_0.2.0_amd64.AppImage --site site --channel stable --version 0.2.0 --target linux-x86_64 --sig Voxear.Launcher_0.2.0_amd64.AppImage.sig
+voxear-release launcher add out/Voxear.Launcher_0.2.0_amd64.AppImage --site site --channel stable --version 0.2.0 --target linux-x86_64 --sig out/Voxear.Launcher_0.2.0_amd64.AppImage.sig
 ```
 
 ```bash
@@ -642,13 +666,13 @@ The window lives in `app/`: a React 19, Vite and TypeScript front end in `app/sr
 `app/src-tauri`, whose commands call `voxear_launcher`. The shell is its own Cargo workspace, so building and
 testing the core never needs Node.
 
-**Look.** The same direction as the engine's editor: Unity's dark concept crossed with Linear.
+**Look.** The same direction as the engine's editor: dark, calm and dense.
 - Surfaces are separated by lightness (elevation) rather than borders, with 1 px separators.
 - Every colour comes from three OKLCH inputs, `--base-hue`, `--accent-hue` and `--contrast`, in
   `app/src/theme/tokens.css`. The editor's theme generator should use the same scheme.
 - Inter, bundled, with its optical-size axis, so large headings get the Inter Display cut.
 - Transitions of 100–180 ms with ease-out curves, which never block input. Reduced-motion settings turn them off.
-- A frameless window with its own title bar, as in Whisk.
+- A frameless window with its own title bar.
 
 **Screens.**
 - **Projects:**
@@ -728,7 +752,7 @@ error.
 |---|---|
 | `VOXUP_HOME` | Moves the whole launcher folder (portable setups, tests). |
 | `VOXUP_RELEASES` | Overrides where engine releases are listed. `--releases` does the same for one command. |
-| `VOXUP_LAUNCHER_UPDATES` | Overrides where the launcher's update manifests are read from. |
+| `VOXUP_LAUNCHER_UPDATES` | Overrides where the launcher's update manifests are read from: an `https://` URL, `http://` on this machine, or (for `voxup`) a folder. |
 | `VOXEAR_HOME` | Set by the launcher for every engine process it starts. |
 
 Release sources are `https://` URLs or local paths (`file://` URLs or plain paths). Plain HTTP is refused.
@@ -767,8 +791,8 @@ These are the engine-side parts of the contract. The launcher stubs them in its 
 2. **Windows code signing** for the launcher installer, so SmartScreen doesn't warn.
 3. **Backups:** whether to delete old ones on their own after a while. For now they are kept until deleted.
 4. **The Jar:** whether the launcher should also appear in The Jar's catalogue.
-5. **Release automation:** a GitHub Actions workflow that builds both platforms and runs `voxear-release`. Until
-   then, releases are published by hand as described above.
+5. **Release automation:** the Installers workflow builds and signs both platforms' installers. Listing them with
+   `voxear-release`, uploading and publishing the site are still done by hand, as described above.
 
 ## Status
 
@@ -782,6 +806,7 @@ These are the engine-side parts of the contract. The launcher stubs them in its 
 | `voxup` command line | Done |
 | Opening projects | Done; waits for the editor (M3) |
 | Launcher window (Tauri): projects, installs, new project, settings, palette | Done; commands tested through IPC |
-| Launcher self-update: window (Tauri's updater) and `voxup self update` | Done; `voxup` tested end to end, the window's install step waits for a real signed build |
+| Launcher self-update: window (Tauri's updater), `--update` and `voxup self update` | Done; size, hash and signature checks tested; Linux tested end to end with a local fake release |
+| Installers: Windows setup program, Linux AppImage with `--install` / `--uninstall` | Done; Linux tested live, the Windows setup waits for a run on Windows |
 | Release tool (`voxear-release`): keys, engine and launcher manifests | Done, tested against the launcher's own install and update code |
 | Changing engine versions, with backups and restore | Done, tested; the conversion itself waits for `vox upgrade` |

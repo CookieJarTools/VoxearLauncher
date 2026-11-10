@@ -1,14 +1,14 @@
 # Voxear Launcher
 
 Install versions of the [Voxear](https://github.com/CookieJarTools/Voxear) game engine, keep your projects in one
-list, and open each project with the engine version it was made for. The Voxear Launcher is to Voxear what Unity Hub
-is to Unity.
+list, and open each project with the engine version it was made for.
 
 ![The Voxear Launcher's project list](docs/images/projects.png)
 
 > [!NOTE]
-> Voxear and its launcher are in early development. Nightly engine builds for Linux are published, but the launcher
-> itself has no release yet, so for now you build it from source (see [Building from source](#building-from-source)).
+> Voxear and its launcher are in early development. Nightly engine builds for Linux are published. The launcher's
+> installers are ready, but none is published yet, so for now you build it from source (see
+> [Building from source](#building-from-source)).
 
 ## Features
 
@@ -28,11 +28,22 @@ is to Unity.
   **Installs**, without installing the version again.
 - **A command line for everything.** `voxup` does all of the above from a terminal, for scripts and build servers.
 - **Keeps itself up to date.** The launcher updates itself from signed releases, checked the same way as the engine.
+  A download that fails part way leaves the launcher as it was, and your engines and settings are never touched.
 
 ## Requirements
 
 - **Linux** (x86-64) or **Windows 10 or 11**.
 - Published engine versions are Linux only for now. On Windows, you can add an engine you built from source.
+
+## Installing
+
+- **Windows:** run `Voxear.Launcher_<version>_x64-setup.exe`. It installs for your user, without admin rights, and
+  adds the launcher to the Start menu and the desktop. Uninstall it from **Settings › Apps**.
+- **Linux:** make `Voxear.Launcher_<version>_amd64.AppImage` executable and run it with `--install`, or open it and
+  click **Install**. That adds the launcher to your app menu, and `voxear-launcher --uninstall` takes it out again.
+
+Releases are published on [VoxearReleases](https://github.com/CookieJarTools/VoxearReleases/releases).
+[Installing, updating and uninstalling](docs/INSTALLING.md) has the details.
 
 ## Building from source
 
@@ -65,6 +76,7 @@ npm run tauri build
 ```
 
 This makes an AppImage and a `.deb` on Linux, and an installer on Windows, in `app/src-tauri/target/release/bundle/`.
+`scripts/build-installers.sh` does the same and gathers them in `out/`, named as they are published.
 
 ### The `voxup` command line
 
@@ -103,10 +115,22 @@ Already have a Voxear project? Click **Add** on the **Projects** screen and choo
 
 Run `voxup --help`, or `voxup <command> --help`, for every option.
 
+The launcher itself takes a few options too:
+
+| Command | What it does |
+| --- | --- |
+| `voxear-launcher --update` | Updates the launcher without opening the window |
+| `voxear-launcher --install` | Adds the AppImage to the app menu (Linux) |
+| `voxear-launcher --uninstall` | Takes the launcher out of the app menu and removes it, keeping engines and settings (Linux) |
+| `voxear-launcher --version` | Prints the launcher's version |
+
 ## Where the launcher keeps its files
 
 Engine installs, the project list and settings go in `~/.local/share/voxear` on Linux and `%LOCALAPPDATA%\Voxear` on
 Windows. Set `VOXUP_HOME` to use another folder.
+
+The launcher program is installed apart from them, so updating or uninstalling it leaves them alone: in
+`~/.local/bin/voxear-launcher` on Linux, and `%LOCALAPPDATA%\Voxear Launcher` on Windows.
 
 ## Contributing
 
@@ -160,7 +184,7 @@ Then try `voxup list --available`, `voxup install stable`, `voxup new Orbit -l /
 `voxear-release` makes the signing keys, signs engine archives and launcher builds, and writes the release feeds
 the launcher reads. Releases are published to
 [VoxearReleases](https://github.com/CookieJarTools/VoxearReleases). "Publishing releases" in the design explains each
-step.
+step for the engine, and "Making a release" in [docs/INSTALLING.md](docs/INSTALLING.md) for the launcher.
 
 ```bash
 cargo run -p voxear_release -- --help
@@ -174,7 +198,9 @@ cargo run -p voxear_release -- --help
 | `crates/voxup` | The `voxup` command line |
 | `crates/voxear_release` | The release tool: keys, signing and release feeds |
 | `app/` | The launcher window: a React front end in `src/`, and Tauri commands in `src-tauri/` |
-| `docs/` | The design |
+| `scripts/` | Building the installers, and setting the launcher's version |
+| `.github/workflows/` | Building the installers on Linux and Windows |
+| `docs/` | The design, and installing and releasing the launcher |
 
 ## Licence
 
