@@ -71,6 +71,10 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, launcher: comman
         commands::restart_launcher,
         commands::add_module,
         commands::remove_module,
+        commands::whisk_status,
+        commands::install_whisk,
+        commands::open_whisk,
+        commands::remove_whisk,
     ])
 }
 

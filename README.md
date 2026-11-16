@@ -26,6 +26,8 @@ is to Unity.
 - **Optional parts.** Choose what comes with each engine version: the offline Voxear Manual, and the Dedicated
   Server that dedicated-server builds of your game ship. Anything you leave out can be added later from
   **Installs**, without installing the version again.
+- **Whisk, the code editor.** Install Whisk, the code editor Voxear opens scripts in, from **Settings**, and open
+  any project in it. It keeps itself up to date after that.
 - **A command line for everything.** `voxup` does all of the above from a terminal, for scripts and build servers.
 - **Keeps itself up to date.** The launcher updates itself from signed releases, checked the same way as the engine.
 
@@ -99,6 +101,7 @@ Already have a Voxear project? Click **Add** on the **Projects** screen and choo
 | `voxup add <folder>` / `voxup remove <folder>` | Adds a project to the list, or takes it off (its files stay) |
 | `voxup upgrade [folder] --to 0.3` | Moves a project to another engine version, backing it up first |
 | `voxup backups [folder]` / `voxup restore <archive>` | Lists a project's backups, or restores one into a new folder |
+| `voxup whisk install` | Installs Whisk, the code editor (or `open [folder]`, `remove`, `where`) |
 | `voxup self update` | Updates `voxup` |
 
 Run `voxup --help`, or `voxup <command> --help`, for every option.

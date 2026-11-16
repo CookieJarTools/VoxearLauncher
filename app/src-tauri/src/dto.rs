@@ -358,3 +358,22 @@ impl From<&Report> for UpgradeReportDto {
         }
     }
 }
+
+/// Whisk, the code editor: where it is, and whether the launcher installed it (and so can remove it).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WhiskDto {
+    pub installed: bool,
+    pub path: Option<String>,
+    pub by_launcher: bool,
+}
+
+impl From<Option<&voxear_launcher::whisk::Whisk>> for WhiskDto {
+    fn from(whisk: Option<&voxear_launcher::whisk::Whisk>) -> Self {
+        Self {
+            installed: whisk.is_some(),
+            path: whisk.map(|whisk| whisk.path.display().to_string()),
+            by_launcher: whisk.is_some_and(|whisk| whisk.source == voxear_launcher::whisk::WhiskSource::Launcher),
+        }
+    }
+}

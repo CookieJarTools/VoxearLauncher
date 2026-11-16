@@ -3,7 +3,7 @@ import type { Install, Project } from '../api'
 import { Icon } from '../components/Icon'
 import { ago, fuzzy, hueOf, pretty } from '../lib/format'
 import { menuAt, useStore, type MenuEntry } from '../store'
-import { addProject, openProject, removeProject, reveal, toggleFavourite } from './projectActions'
+import { addProject, openInWhisk, openProject, removeProject, reveal, toggleFavourite } from './projectActions'
 
 export function ProjectsView() {
   const projects = useStore((s) => s.projects)
@@ -133,9 +133,11 @@ function ProjectRow({
   selected: boolean
   onSelect: () => void
 }) {
+  const whisk = useStore((s) => s.whisk)
   const menu: MenuEntry[] = [
     { label: 'Open', icon: 'play', run: () => void openProject(project) },
     { label: 'Show in files', icon: 'folder', run: () => void reveal(project.path) },
+    ...(whisk?.installed ? [{ label: 'Open in Whisk', icon: 'code' as const, run: () => void openInWhisk(project) }] : []),
     { label: project.favourite ? 'Unfavourite' : 'Favourite', icon: 'star', run: () => void toggleFavourite(project) },
     'divider',
     { label: project.engine ? 'Change engine version…' : 'Pin to an engine version…', icon: 'cube', run: () => useStore.getState().openUpgrade(project) },

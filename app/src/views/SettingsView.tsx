@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { api, failure, type Settings } from '../api'
-import { ProgressBar } from '../components/Bits'
+import { api, failure, type Progress, type Settings } from '../api'
+import { phaseText, ProgressBar } from '../components/Bits'
 import { Icon } from '../components/Icon'
 import { ago, bytes, pretty } from '../lib/format'
 import { useStore } from '../store'
@@ -136,6 +136,8 @@ export function SettingsView() {
             </div>
           </div>
 
+          <WhiskSection />
+
           <LauncherUpdates />
 
           <div className="settings-section">
@@ -233,6 +235,75 @@ function LauncherUpdates() {
       {update.state === 'downloading' && (
         <ProgressBar progress={update.total ? { phase: 'downloading', done: update.done, total: update.total } : null} />
       )}
+    </div>
+  )
+}
+
+/** Whisk, the code editor Voxear opens scripts in: install it, open it, or remove the copy the launcher installed. */
+function WhiskSection() {
+  const info = useStore((s) => s.info)
+  const whisk = useStore((s) => s.whisk)
+  const toast = useStore((s) => s.toast)
+  const [progress, setProgress] = useState<Progress | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const run = async (work: () => Promise<void>) => {
+    setBusy(true)
+    try {
+      await work()
+    } catch (error) {
+      toast('error', failure(error).message)
+    } finally {
+      setBusy(false)
+      setProgress(null)
+    }
+  }
+  const install = () =>
+    run(async () => {
+      const found = await api.installWhisk(setProgress)
+      useStore.setState({ whisk: found })
+      toast('ok', 'Whisk is installed')
+    })
+  const remove = () =>
+    run(async () => {
+      useStore.setState({ whisk: await api.removeWhisk() })
+      toast('ok', 'Removed Whisk')
+    })
+  const open = () => run(() => api.openWhisk(null))
+
+  let status = 'Not installed.'
+  if (busy && progress) status = phaseText(progress, false)
+  else if (whisk?.installed && whisk.path) status = info ? pretty(whisk.path, info.userHome) : whisk.path
+
+  return (
+    <div className="settings-section">
+      <h2>Code editor</h2>
+      <div className="field">
+        <span className="label">Whisk</span>
+        <div className="input-row" style={{ alignItems: 'center' }}>
+          <span className="hint" style={{ flex: 1 }} title={whisk?.path ?? undefined}>
+            {status}
+          </span>
+          {whisk?.installed ? (
+            <>
+              <button className="btn btn-sm" onClick={() => void open()} disabled={busy}>
+                Open
+              </button>
+              {whisk.byLauncher && (
+                <button className="btn btn-sm btn-ghost" onClick={() => void remove()} disabled={busy}>
+                  Remove
+                </button>
+              )}
+            </>
+          ) : (
+            <button className="btn btn-primary btn-sm" onClick={() => void install()} disabled={busy}>
+              {busy ? 'Installing…' : 'Install'}
+            </button>
+          )}
+        </div>
+        {busy && progress && <ProgressBar progress={progress} />}
+        <span className="hint">The editor opens scripts in Whisk. It keeps itself up to date once installed.</span>
+      </div>
     </div>
   )
 }

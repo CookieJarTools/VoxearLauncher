@@ -1,6 +1,6 @@
 import type { MouseEvent } from 'react'
 import { create } from 'zustand'
-import { api, failure, type AppInfo, type Install, type ModuleName, type Progress, type Project, type Releases, type UpdateStatus } from './api'
+import { api, failure, type AppInfo, type Install, type ModuleName, type Progress, type Project, type Releases, type UpdateStatus, type Whisk } from './api'
 import type { IconName } from './components/Icon'
 
 export type View = 'projects' | 'installs' | 'settings'
@@ -69,6 +69,8 @@ interface State {
   /** The project whose backups are shown. */
   backupsOf: Project | null
   launcherUpdate: LauncherUpdate
+  /** Whisk, the code editor, as the last refresh found it. */
+  whisk: Whisk | null
 
   setView(view: View): void
   init(): Promise<void>
@@ -163,6 +165,7 @@ export const useStore = create<State>((set, get) => {
     upgrading: null,
     backupsOf: null,
     launcherUpdate: { state: 'idle', status: null, checkedAt: null },
+    whisk: null,
 
     setView: (view) => set({ view }),
 
@@ -188,6 +191,8 @@ export const useStore = create<State>((set, get) => {
       } catch (error) {
         get().toast('error', failure(error).message)
       }
+      // Quietly: the lists matter more than where Whisk is.
+      api.whiskStatus().then((whisk) => set({ whisk }), () => {})
     },
 
     loadReleases: async () => {

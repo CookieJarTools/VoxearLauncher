@@ -309,3 +309,25 @@ fn installs_adds_and_removes_the_server() {
     let error = fixture.call("remove_module", json!({ "version": "0.2.0", "name": "bin" })).unwrap_err();
     assert!(error.to_string().contains("bin"), "{error}");
 }
+
+/// Whisk is found or not wherever this machine keeps it, so only the launcher's own copy is checked here; the
+/// install itself is tested in the core against a release signed with a test key.
+#[test]
+fn says_where_whisk_is_and_removes_only_its_own_copy() {
+    let fixture = Fixture::new();
+    let status = fixture.ok("whisk_status", json!({}));
+    assert_eq!(status["installed"], status["path"].is_string(), "{status}");
+    assert_eq!(status["byLauncher"], false, "this launcher hasn't installed Whisk");
+
+    let own = voxear_launcher::whisk::launcher_copy(&Layout::new(fixture.dir.path().join("home")));
+    std::fs::create_dir_all(own.parent().unwrap()).unwrap();
+    std::fs::write(&own, "whisk").unwrap();
+    if cfg!(not(windows)) {
+        let status = fixture.ok("whisk_status", json!({}));
+        assert_eq!(status["byLauncher"], true, "{status}");
+        assert_eq!(status["path"], own.display().to_string());
+    }
+    let after = fixture.ok("remove_whisk", json!({}));
+    assert_eq!(after["byLauncher"], false, "{after}");
+    assert!(!own.exists());
+}

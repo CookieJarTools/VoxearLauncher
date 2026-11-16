@@ -270,6 +270,7 @@ treated that way.
   downloads/                    archives while they download (*.part)
   staging/                      archives while they unpack
   trash/                        engines being removed
+  tools/whisk/Whisk.AppImage    Whisk, when the launcher installed it (Linux)
   store.lock                    held while installs change
 ```
 
@@ -518,6 +519,25 @@ vox new <folder> --name <name> --template <id>
 
 The launcher adds the new project to the list, shows each step as it arrives, and offers to open it.
 
+## Whisk
+
+Whisk, the code editor the engine's editor opens scripts and projects in, is installed beside the engines rather
+than with one: one copy serves every engine version, and Whisk updates itself. Core: `voxear_launcher::whisk`.
+
+- **Releases.** Whisk's own GitHub releases, described by `latest.json` in the format Tauri's updater reads, keyed
+  by the same platform names as engine releases. `VOXUP_WHISK_UPDATES` overrides where it is read from.
+- **Checks.** Each download is checked against Whisk's update key, built into the launcher, and its trusted
+  comment must name the version the manifest announces, as for the launcher's own updates.
+- **Linux.** The AppImage goes to `tools/whisk/Whisk.AppImage`. If nothing yet says where Whisk is,
+  `~/.whisk/install-path` is written too; Whisk rewrites that file each time it starts, and the editor reads it.
+- **Windows.** Whisk's per-user installer runs silently (`/S`) and Whisk lands in `%LOCALAPPDATA%\Whisk`.
+- **Finding it.** The launcher's copy, then `~/.whisk/install-path` (or another Whisk AppImage in that folder when
+  the recorded one has gone), then `/usr/bin/whisk` from Whisk's packages, or on Windows the folder Whisk's
+  installer records under `HKCU\Software\CookieJarTools\Whisk`.
+- **Opening.** `whisk <folder> [<file>[:<line>]…]`. A running Whisk takes the arguments and the new process quits.
+  Started from the launcher's AppImage, Whisk gets the environment the launcher was started with.
+- **Removing** takes away only the launcher's copy. A Whisk installed any other way is left alone.
+
 ## Launcher self-update
 
 The launcher updates itself from **its own manifest, signed with its own key**, separately from engine versions.
@@ -729,6 +749,7 @@ error.
 | `VOXUP_HOME` | Moves the whole launcher folder (portable setups, tests). |
 | `VOXUP_RELEASES` | Overrides where engine releases are listed. `--releases` does the same for one command. |
 | `VOXUP_LAUNCHER_UPDATES` | Overrides where the launcher's update manifests are read from. |
+| `VOXUP_WHISK_UPDATES` | Overrides where Whisk's release manifest is read from. |
 | `VOXEAR_HOME` | Set by the launcher for every engine process it starts. |
 
 Release sources are `https://` URLs or local paths (`file://` URLs or plain paths). Plain HTTP is refused.

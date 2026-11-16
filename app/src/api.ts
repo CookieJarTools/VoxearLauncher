@@ -66,6 +66,13 @@ export interface Releases {
   unpublished: boolean
 }
 
+/** Whisk, the code editor scripts open in: where it is, and whether the launcher installed it and so can remove it. */
+export interface Whisk {
+  installed: boolean
+  path: string | null
+  byLauncher: boolean
+}
+
 export type UpdateStatus =
   | { kind: 'notSetUp'; reason: string }
   | { kind: 'nothingPublished' }
@@ -217,6 +224,11 @@ export interface Api {
   checkLauncherUpdate(): Promise<UpdateStatus>
   installLauncherUpdate(onProgress: (progress: { done: number; total: number | null }) => void): Promise<void>
   restartLauncher(): Promise<void>
+  whiskStatus(): Promise<Whisk>
+  installWhisk(onProgress: (progress: Progress) => void): Promise<Whisk>
+  /** Opens Whisk, on a project's folder when one is given. */
+  openWhisk(path: string | null): Promise<void>
+  removeWhisk(): Promise<Whisk>
   pickFolder(title: string, defaultPath?: string): Promise<string | null>
   pickFile(title: string, name: string, extensions: string[]): Promise<string | null>
   reveal(path: string): Promise<void>
@@ -265,6 +277,10 @@ const tauriApi: Api = {
   checkLauncherUpdate: () => invoke('check_launcher_update'),
   installLauncherUpdate: (onProgress) => invoke('install_launcher_update', { onProgress: channel(onProgress) }),
   restartLauncher: () => invoke('restart_launcher'),
+  whiskStatus: () => invoke('whisk_status'),
+  installWhisk: (onProgress) => invoke('install_whisk', { onProgress: channel(onProgress) }),
+  openWhisk: (path) => invoke('open_whisk', { path }),
+  removeWhisk: () => invoke('remove_whisk'),
   pickFolder: async (title, defaultPath) => {
     const picked = await open({ directory: true, title, defaultPath })
     return typeof picked === 'string' ? picked : null

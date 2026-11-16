@@ -14,8 +14,8 @@ use tauri_plugin_updater::UpdaterExt;
 use voxear_launcher::manifest::SIGNATURE_SUFFIX;
 use voxear_launcher::new_project::{self, NewProject, Offer};
 use voxear_launcher::{
-    InstallKind, Layout, Module, Platform, Registry, Removed, Selector, Settings, Store, backup, fetch, launcher_version,
-    project, releases, self_update, upgrade,
+    InstallKind, Layout, Module, Platform, Registry, Removed, Selector, Settings, Store, backup, fetch,
+    launcher_version, project, releases, self_update, upgrade, whisk,
 };
 
 use crate::dto::*;
@@ -587,4 +587,43 @@ pub async fn add_module(
 #[tauri::command]
 pub async fn remove_module(launcher: Shared<'_>, version: String, name: Module) -> Reply<()> {
     blocking(&launcher, move |launcher| launcher.store().remove_module(&Version::parse(&version)?, name)).await
+}
+
+/// Where Whisk, the code editor, is, if it's installed.
+#[tauri::command]
+pub async fn whisk_status(launcher: Shared<'_>) -> Reply<WhiskDto> {
+    blocking(&launcher, |launcher| Ok(WhiskDto::from(whisk::find(&launcher.layout).as_ref()))).await
+}
+
+/// Installs the newest Whisk, checked against Whisk's own key. It keeps itself up to date after that.
+#[tauri::command]
+pub async fn install_whisk(launcher: Shared<'_>, on_progress: Channel<ProgressDto>) -> Reply<WhiskDto> {
+    blocking(&launcher, move |launcher| {
+        let mut progress = |step| _ = on_progress.send(ProgressDto::from(step));
+        let url = whisk::manifest_url();
+        let installed = whisk::install(&launcher.layout, &url, whisk::WHISK_KEY, launcher.platform, &mut progress)?;
+        Ok(WhiskDto::from(Some(&installed.whisk)))
+    })
+    .await
+}
+
+/// Opens Whisk, on a project's folder when one is given.
+#[tauri::command]
+pub async fn open_whisk(launcher: Shared<'_>, path: Option<String>) -> Reply<()> {
+    blocking(&launcher, move |launcher| {
+        let found = whisk::find(&launcher.layout).ok_or_else(|| anyhow!("Whisk isn't installed"))?;
+        let folder = path.map(|path| project::project_root(Path::new(&path)));
+        whisk::open(&found.path, folder.as_deref(), &[])
+    })
+    .await
+}
+
+/// Removes the Whisk the launcher installed; one installed some other way stays.
+#[tauri::command]
+pub async fn remove_whisk(launcher: Shared<'_>) -> Reply<WhiskDto> {
+    blocking(&launcher, |launcher| {
+        whisk::remove(&launcher.layout)?;
+        Ok(WhiskDto::from(whisk::find(&launcher.layout).as_ref()))
+    })
+    .await
 }

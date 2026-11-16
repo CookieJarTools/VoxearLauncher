@@ -6,6 +6,7 @@ mod projects;
 mod selfupdate;
 mod ui;
 mod upgrades;
+mod whisk;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -94,6 +95,9 @@ enum Command {
     /// The launcher's own updates.
     #[command(name = "self", subcommand)]
     SelfCommand(selfupdate::SelfCommand),
+    /// Whisk, the code editor Voxear opens scripts in: install, open or remove it.
+    #[command(subcommand)]
+    Whisk(whisk::WhiskCommand),
     /// Show the templates, setup and IDEs an engine version offers for new projects.
     Templates {
         /// The engine version to ask (default: the newest stable one installed).
@@ -138,6 +142,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Backups { folder } => upgrades::backups(&launcher, folder.as_deref()),
         Command::Restore { backup } => upgrades::restore(&launcher, &backup),
         Command::SelfCommand(command) => selfupdate::run(&launcher, command),
+        Command::Whisk(command) => whisk::run(&launcher, command),
         Command::Templates { engine } => projects::templates(&launcher, engine.as_deref()),
     }
 }

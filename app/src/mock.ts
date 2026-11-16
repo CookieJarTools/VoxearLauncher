@@ -1,7 +1,7 @@
 // An in-memory stand-in for the Rust core, used when the UI runs in a plain browser. It behaves like the real
 // commands closely enough to preview every screen: installs take a few seconds, and `vox new` reports steps.
 
-import type { Api, Backup, Direction, Install, Module, ModuleName, NewProjectForm, Offer, Progress, Project, Release, Settings } from './api'
+import type { Api, Backup, Direction, Install, Module, ModuleName, NewProjectForm, Offer, Progress, Project, Release, Settings, Whisk } from './api'
 
 const home = '/home/you'
 const engines = `${home}/.local/share/voxear/engines`
@@ -27,11 +27,14 @@ const offer: Offer = {
     { id: 'quality', name: 'Quality presets', description: 'Low, medium, high and ultra' }
   ],
   ides: [
+    { id: 'whisk', name: 'Whisk', description: '' },
     { id: 'rider', name: 'Rider', description: '' },
     { id: 'visual-studio', name: 'Visual Studio', description: '' },
     { id: 'vscode', name: 'VS Code', description: '' }
   ]
 }
+
+let whisk: Whisk = { installed: false, path: null, byLauncher: false }
 
 /** What's installed; `listInstalls` adds which modules each one has. */
 let installs: Omit<Install, 'modules'>[] = [
@@ -288,6 +291,17 @@ export const mockApi: Api = {
     }
   },
   restartLauncher: async () => void location.reload(),
+  whiskStatus: async () => whisk,
+  installWhisk: async (onProgress) => {
+    await simulateInstall('whisk', 89_000_000, onProgress)
+    whisk = { installed: true, path: `${home}/.local/share/voxear/tools/whisk/Whisk.AppImage`, byLauncher: true }
+    return whisk
+  },
+  openWhisk: async () => {},
+  removeWhisk: async () => {
+    whisk = { installed: false, path: null, byLauncher: false }
+    return whisk
+  },
   getSettings: async () => ({ ...settings }),
   saveSettings: async (next) => void (settings = { ...next }),
   pickFolder: async (_title, defaultPath) => window.prompt('Folder', defaultPath ?? home),

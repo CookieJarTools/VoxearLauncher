@@ -6,6 +6,7 @@
 //! - [`registry`]: the project list, and which engine version each project needs.
 //! - [`new_project`]: the new-project flow, which runs the chosen engine's own `vox new`.
 //! - [`upgrade`]: moving a project to another engine version, with a [`backup`] first.
+//! - [`whisk`]: Whisk, the code editor projects open their scripts in, installed beside the engines.
 //!
 //! The formats are described in `docs/DESIGN.md`.
 
@@ -27,6 +28,7 @@ pub mod settings;
 pub mod signing;
 pub mod store;
 pub mod upgrade;
+pub mod whisk;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
