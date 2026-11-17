@@ -7,18 +7,20 @@ use anyhow::{Context, Result, anyhow, bail};
 use console::style;
 use semver::Version;
 use voxear_launcher::manifest::SIGNATURE_SUFFIX;
-use voxear_launcher::{Install, InstallKind, Module, Removed, Selector};
+use voxear_launcher::sources::Ambiguous;
+use voxear_launcher::{Channel, Install, InstallKind, Module, Removed, Selector};
 
 use crate::Launcher;
 use crate::ui::{self, InstallBar};
 
 pub fn list(launcher: &Launcher, available: bool) -> Result<()> {
     let installs = launcher.store.list()?;
-    let mut rows: Vec<Vec<String>> = installs.iter().map(install_row).collect();
+    let mut rows: Vec<Vec<String>> = installs.iter().map(|install| install_row(launcher, install)).collect();
+    let mut hidden_nightlies = 0;
 
     if available {
-        let releases = match launcher.releases() {
-            Ok(releases) => releases,
+        let catalog = match launcher.catalog() {
+            Ok(catalog) => catalog,
             Err(error) if voxear_launcher::fetch::is_not_found(&error) => {
                 if rows.is_empty() {
                     println!("No engine versions are installed, and none are published yet.");
@@ -30,15 +32,22 @@ pub fn list(launcher: &Launcher, available: bool) -> Result<()> {
             }
             Err(error) => return Err(error),
         };
-        for release in releases.manifest.available(launcher.store.platform()) {
+        let nightlies = launcher.settings.nightlies_shown(&installs);
+        for listed in catalog.available(launcher.store.platform()) {
+            let release = listed.release;
             if installs.iter().any(|install| install.version == release.version) {
                 continue;
             }
+            if release.channel == Channel::Nightly && !nightlies {
+                hidden_nightlies += 1;
+                continue;
+            }
             let note = if release.needs_newer_launcher() { "needs a newer launcher" } else { "available" };
+            let from = if listed.source.official { String::new() } else { format!("from {}", listed.source.name) };
             let row = vec![
                 release.version.to_string(),
                 release.channel.to_string(),
-                String::new(),
+                style(from).dim().to_string(),
                 style(note).dim().to_string(),
             ];
             rows.push(row);
@@ -49,16 +58,29 @@ pub fn list(launcher: &Launcher, available: bool) -> Result<()> {
     if rows.is_empty() {
         println!("No engine versions are installed yet.");
         ui::hint("Install one with `voxup install stable`.");
-        return Ok(());
+    } else {
+        ui::table(&rows);
     }
-    ui::table(&rows);
+    if hidden_nightlies > 0 {
+        let count = if hidden_nightlies == 1 {
+            "1 nightly isn't".to_owned()
+        } else {
+            format!("{hidden_nightlies} nightlies aren't")
+        };
+        ui::hint(&format!("{count} listed; show nightlies with `voxup releases nightlies on`."));
+    }
     Ok(())
 }
 
-fn install_row(install: &Install) -> Vec<String> {
+fn install_row(launcher: &Launcher, install: &Install) -> Vec<String> {
     let mut path = ui::pretty(&install.path);
     if install.kind == InstallKind::Located {
         path.push_str(&style(" (located)").dim().to_string());
+    }
+    if let Some(name) =
+        install.releases.as_deref().and_then(|url| launcher.settings.source_name(url, &launcher.official()))
+    {
+        path.push_str(&style(format!(" (from {name})")).dim().to_string());
     }
     if install.missing {
         path.push_str(&style(" (folder not found)").yellow().to_string());
@@ -78,6 +100,7 @@ pub fn install(
     version: Option<String>,
     file: Option<PathBuf>,
     without: Vec<Module>,
+    from: Option<&str>,
 ) -> Result<()> {
     let keys = launcher.keys()?;
     let mut bar = InstallBar::new();
@@ -92,27 +115,30 @@ pub fn install(
         return Ok(());
     }
 
-    let selector: Selector = version.expect("clap requires a version or --file").parse()?;
-    let releases = launcher.releases()?;
+    let version = version.expect("clap requires a version or --file");
+    let selector: Selector = version.parse()?;
+    let catalog = launcher.catalog()?;
     let platform = launcher.store.platform();
-    let release = releases
-        .manifest
-        .select(&selector, platform)
-        .ok_or_else(|| anyhow!("no release matches {selector} for {platform}"))?;
+    let listed = catalog.select(&selector, platform, from).map_err(|error| which_list(error, &version))?;
+    let in_list = from.map(|from| format!(" in {from}'s releases")).unwrap_or_default();
+    let listed = listed.ok_or_else(|| anyhow!("no release matches {selector} for {platform}{in_list}"))?;
+    let release = listed.release;
     if let Some(install) = launcher.store.get(&release.version)? {
         ui::done(&format!("Voxear {} is already installed, at {}", install.version, ui::pretty(&install.path)));
         return Ok(());
     }
 
     let cancel = AtomicBool::new(false);
+    let keys = &listed.source.keys;
     let install =
-        launcher.store.install_without(release, &releases.url, &keys, &without, &mut |p| bar.update(p), &cancel)?;
+        launcher.store.install_without(release, listed.url, keys, &without, &mut |p| bar.update(p), &cancel)?;
     bar.finish();
     let with: Vec<&str> =
         Module::ALL.into_iter().filter(|module| install.has_module(*module)).map(Module::title).collect();
     let with = if with.is_empty() { String::new() } else { format!(", with the {}", with.join(" and ")) };
+    let from = if listed.source.official { String::new() } else { format!(" from {}", listed.source.name) };
     ui::done(&format!(
-        "Installed Voxear {} ({}{with}) in {}",
+        "Installed Voxear {} ({}{with}){from} in {}",
         install.version,
         install.channel,
         ui::pretty(&install.path)
@@ -136,14 +162,15 @@ pub fn module(launcher: &Launcher, module: Module, command: ModuleCommand) -> Re
     match command {
         ModuleCommand::Add { version } => {
             let version = exact(&version)?;
-            let releases = launcher.releases()?;
-            let release = releases.manifest.find(&version).ok_or_else(|| {
-                anyhow!("Voxear {version} isn't in the release list, so its {module} can't be found")
+            let install = launcher.store.get(&version)?.ok_or_else(|| anyhow!("Voxear {version} isn't installed"))?;
+            let catalog = launcher.catalog()?;
+            let listed = catalog.of_install(&install).ok_or_else(|| {
+                anyhow!("Voxear {version} isn't in the release lists, so its {module} can't be found")
             })?;
-            let keys = launcher.keys()?;
+            let (release, keys) = (listed.release, &listed.source.keys);
             let mut bar = InstallBar::new();
             let cancel = AtomicBool::new(false);
-            launcher.store.add_module(release, module, &releases.url, &keys, &mut |p| bar.update(p), &cancel)?;
+            launcher.store.add_module(release, module, listed.url, keys, &mut |p| bar.update(p), &cancel)?;
             bar.finish();
             ui::done(&format!("Added the {module} to Voxear {version}"));
         }
@@ -154,6 +181,15 @@ pub fn module(launcher: &Launcher, module: Module, command: ModuleCommand) -> Re
         }
     }
     Ok(())
+}
+
+/// Says how to choose when two release lists publish different engines under the version asked for.
+pub fn which_list(error: anyhow::Error, version: &str) -> anyhow::Error {
+    let Some(ambiguous) = error.downcast_ref::<Ambiguous>() else { return error };
+    let quote = |name: &str| if name.contains(' ') { format!("\"{name}\"") } else { name.to_owned() };
+    let commands: Vec<_> =
+        ambiguous.sources.iter().map(|name| format!("`voxup install {version} --from {}`", quote(name))).collect();
+    anyhow!("{ambiguous}; install one with {}", commands.join(" or "))
 }
 
 fn exact(version: &str) -> Result<Version> {

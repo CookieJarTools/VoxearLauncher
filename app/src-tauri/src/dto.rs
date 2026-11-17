@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use voxear_launcher::backup::Backup;
 use voxear_launcher::new_project::NewProject;
+use voxear_launcher::sources::{Listing, ListingState};
 use voxear_launcher::upgrade::{Direction, Event, Report};
 use voxear_launcher::{Channel, Install, InstallKind, Module, Platform, Progress, Project, ProjectStatus, Release};
 
@@ -48,6 +49,9 @@ pub struct InstallDto {
     /// Optional parts, such as the manual and the Dedicated Server: what's in the install, and what its release
     /// offers. Filled in by `list_installs`.
     pub modules: Vec<InstallModuleDto>,
+    /// The custom releases it was installed from, by name; `None` for the official ones. Filled in by
+    /// `list_installs`.
+    pub source: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -78,6 +82,7 @@ impl From<&Install> for InstallDto {
             missing: install.missing,
             installed: install.installed.map(|time| time.to_string()),
             modules: Vec::new(),
+            source: None,
         }
     }
 }
@@ -93,11 +98,13 @@ pub struct ReleaseDto {
     pub installed: bool,
     pub needs_newer_launcher: bool,
     pub modules: Vec<ModuleDto>,
+    /// The custom releases that publish it, by name; `None` for the official ones.
+    pub source: Option<String>,
 }
 
 impl ReleaseDto {
     /// `size` is the engine archive's for `platform`; the modules are those offered there.
-    pub fn new(release: &Release, platform: Platform, size: u64, installed: bool) -> Self {
+    pub fn new(release: &Release, platform: Platform, size: u64, installed: bool, source: Option<String>) -> Self {
         Self {
             version: release.version.to_string(),
             channel: release.channel,
@@ -111,6 +118,7 @@ impl ReleaseDto {
                 .into_iter()
                 .map(|module| ModuleDto { name: module.name, title: module.title.clone(), size: module.size })
                 .collect(),
+            source,
         }
     }
 }
@@ -118,13 +126,60 @@ impl ReleaseDto {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReleasesDto {
-    /// Where releases are listed, or `None` when no source is set yet.
-    pub source: Option<String>,
+    /// Every release list, the official one first, and how reading each one went.
+    pub sources: Vec<SourceDto>,
+    /// The releases of every list, newest first.
     pub releases: Vec<ReleaseDto>,
-    /// Why the saved list was shown instead of a fresh one.
-    pub stale: Option<String>,
-    /// Nothing has been published at the source yet.
-    pub unpublished: bool,
+    /// Whether nightly builds are shown.
+    pub nightlies: bool,
+}
+
+/// One release list.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceDto {
+    pub name: String,
+    pub url: String,
+    pub official: bool,
+    pub state: SourceState,
+    /// Why the list couldn't be read, or why its saved copy was shown instead of a fresh one.
+    pub error: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SourceState {
+    Listed,
+    /// Its saved copy, since a fresh one couldn't be fetched.
+    Stale,
+    /// Nothing is published there yet.
+    Unpublished,
+    Failed,
+}
+
+impl From<&Listing> for SourceDto {
+    fn from(listing: &Listing) -> Self {
+        let (state, error) = match &listing.state {
+            ListingState::Loaded(releases) => match &releases.stale {
+                Some(reason) => (SourceState::Stale, Some(reason.clone())),
+                None => (SourceState::Listed, None),
+            },
+            ListingState::Unpublished => (SourceState::Unpublished, None),
+            ListingState::Failed(error) => (SourceState::Failed, Some(format!("{error:#}"))),
+        };
+        let source = &listing.source;
+        Self { name: source.name.clone(), url: source.url.clone(), official: source.official, state, error }
+    }
+}
+
+/// Custom releases just added: their name, their manifest's address, and how many releases they have, or `None`
+/// when nothing is published there yet.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddedReleasesDto {
+    pub name: String,
+    pub url: String,
+    pub releases: Option<usize>,
 }
 
 #[derive(Serialize)]

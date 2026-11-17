@@ -18,13 +18,19 @@ struct Fixture {
 }
 
 impl Fixture {
+    /// The fake releases stand in for the official ones.
     fn new() -> Self {
+        Self::listing_official_releases_at(|fake| fake.url())
+    }
+
+    fn listing_official_releases_at(official: impl FnOnce(&FakeReleases) -> String) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let mut fake = FakeReleases::new(dir.path().join("mirror"));
         fake.add("0.1.0", Channel::Stable);
         fake.add("0.2.0", Channel::Stable);
         fake.write();
-        let launcher = Launcher::with_layout(Layout::new(dir.path().join("home")), Platform::current().unwrap());
+        let launcher = Launcher::with_layout(Layout::new(dir.path().join("home")), Platform::current().unwrap())
+            .with_official_releases(official(&fake));
         let app = crate::with_commands(mock_builder(), launcher).build(mock_context(noop_assets())).unwrap();
         let window = WebviewWindowBuilder::new(&app, "main", Default::default()).build().unwrap();
         Self { dir, window, fake }
@@ -48,7 +54,7 @@ impl Fixture {
     }
 
     fn trust_the_fake_releases(&self) {
-        let settings = json!({ "releases": self.fake.url(), "trusted_keys": [self.fake.key.public()] });
+        let settings = json!({ "trusted_keys": [self.fake.key.public()] });
         self.ok("save_settings", json!({ "settings": settings }));
     }
 
@@ -82,13 +88,96 @@ fn describes_the_app() {
 
 #[test]
 fn says_when_nothing_is_published_yet() {
-    let fixture = Fixture::new();
-    let nowhere = fixture.dir.path().join("unpublished").join("releases.toml").display().to_string();
-    fixture.ok("save_settings", json!({ "settings": { "releases": nowhere } }));
+    let fixture = Fixture::listing_official_releases_at(|fake| {
+        fake.dir.parent().unwrap().join("unpublished").join("releases.toml").display().to_string()
+    });
     let releases = fixture.ok("list_releases", json!({}));
-    assert_eq!(releases["unpublished"], true);
+    assert_eq!(releases["sources"][0]["name"], "Official");
+    assert_eq!(releases["sources"][0]["state"], "unpublished");
     assert_eq!(releases["releases"], json!([]));
     assert_eq!(fixture.ok("list_installs", json!({})), json!([]));
+}
+
+/// Someone else's releases, such as a fork's, signed with their own key and listed beside the official ones.
+#[test]
+fn lists_custom_releases_beside_the_official_ones() {
+    let fixture = Fixture::new();
+    fixture.trust_the_fake_releases();
+    let mut fork = FakeReleases::new(fixture.dir.path().join("fork"));
+    fork.add("0.2.0+fork", Channel::Stable);
+    fork.write();
+
+    let stranger = voxear_launcher::testing::TestKey::generate().public();
+    let wrong = json!({ "address": fork.url(), "name": "Fork", "key": stranger });
+    let error = fixture.call("add_custom_releases", wrong).unwrap_err();
+    assert!(error["message"].as_str().unwrap().contains("signature"), "{error}");
+    assert!(fixture.ok("get_settings", json!({})).get("custom_releases").is_none(), "nothing was added");
+
+    let added =
+        fixture.ok("add_custom_releases", json!({ "address": fork.url(), "name": "Fork", "key": fork.key.public() }));
+    assert_eq!(added, json!({ "name": "Fork", "url": fork.url(), "releases": 1 }));
+    let saved = fixture.ok("get_settings", json!({}));
+    assert_eq!(saved["custom_releases"][0]["name"], "Fork");
+    assert_eq!(saved["custom_releases"][0]["key"], fork.key.public());
+
+    let releases = fixture.ok("list_releases", json!({}));
+    let listed: Vec<_> =
+        releases["releases"].as_array().unwrap().iter().map(|r| (r["version"].clone(), r["source"].clone())).collect();
+    assert_eq!(
+        listed,
+        [(json!("0.2.0+fork"), json!("Fork")), (json!("0.2.0"), json!(null)), (json!("0.1.0"), json!(null))]
+    );
+    let states: Vec<_> =
+        releases["sources"].as_array().unwrap().iter().map(|s| (s["name"].clone(), s["state"].clone())).collect();
+    assert_eq!(states, [(json!("Official"), json!("listed")), (json!("Fork"), json!("listed"))]);
+
+    // A project pinned to the fork's version finds it without being told where.
+    let install = fixture.ok("install", json!({ "version": "0.2.0+fork", "onProgress": channel(1) }));
+    assert_eq!(install["version"], "0.2.0+fork");
+    assert_eq!(fixture.ok("list_installs", json!({}))[0]["source"], "Fork");
+    let official =
+        fixture.ok("install", json!({ "version": "stable", "source": "Official", "onProgress": channel(2) }));
+    assert_eq!(official["version"], "0.2.0");
+    assert_eq!(fixture.ok("list_installs", json!({}))[1]["source"], json!(null));
+
+    fixture.ok("remove_custom_releases", json!({ "name": "fork" }));
+    let releases = fixture.ok("list_releases", json!({}));
+    assert_eq!(releases["sources"].as_array().unwrap().len(), 1);
+    assert_eq!(fixture.ok("list_installs", json!({}))[0]["source"], "fork", "still says where it came from");
+}
+
+#[test]
+fn moves_the_old_release_setting_over() {
+    let fixture = Fixture::new();
+    let old = fixture.dir.path().join("old-mirror").join("releases.toml").display().to_string();
+    let settings = fixture.dir.path().join("home").join("settings.toml");
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    std::fs::write(&settings, format!("releases = {old:?}\nproject_location = \"/games\"\n")).unwrap();
+
+    let saved = fixture.ok("get_settings", json!({}));
+    assert_eq!(saved["custom_releases"], json!([{ "name": "old-mirror", "url": old }]));
+    assert!(saved.get("releases").is_none(), "{saved}");
+    assert_eq!(saved["project_location"], "/games");
+    let releases = fixture.ok("list_releases", json!({}));
+    assert_eq!(releases["sources"][1]["name"], "old-mirror");
+    assert_eq!(releases["sources"][1]["state"], "unpublished");
+}
+
+#[test]
+fn hides_nightlies_until_asked_or_one_is_installed() {
+    let mut fixture = Fixture::new();
+    fixture.fake.add("0.3.0-nightly.20261117", Channel::Nightly);
+    fixture.fake.write();
+    fixture.trust_the_fake_releases();
+    assert_eq!(fixture.ok("list_releases", json!({}))["nightlies"], false);
+
+    fixture.ok("install", json!({ "version": "nightly", "onProgress": channel(1) }));
+    assert_eq!(fixture.ok("list_releases", json!({}))["nightlies"], true, "one is installed");
+
+    let mut settings = fixture.ok("get_settings", json!({}));
+    settings["nightlies"] = json!(false);
+    fixture.ok("save_settings", json!({ "settings": settings }));
+    assert_eq!(fixture.ok("list_releases", json!({}))["nightlies"], false, "as set");
 }
 
 #[test]
@@ -130,7 +219,7 @@ fn reports_a_missing_version_as_a_failure() {
     fixture.trust_the_fake_releases();
     let error = fixture.call("install", json!({ "version": "9.9.9", "onProgress": channel(1) })).unwrap_err();
     assert_eq!(error["cancelled"], false);
-    assert!(error["message"].as_str().unwrap().contains("isn't in the release list"), "{error}");
+    assert!(error["message"].as_str().unwrap().contains("isn't in the release lists"), "{error}");
 }
 
 /// The fake engine's `vox` is a shell script, so this runs where shell scripts do.

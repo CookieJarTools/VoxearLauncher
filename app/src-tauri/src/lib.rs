@@ -60,6 +60,8 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>, launcher: comman
         commands::create_project,
         commands::get_settings,
         commands::save_settings,
+        commands::add_custom_releases,
+        commands::remove_custom_releases,
         commands::upgrade_choices,
         commands::release_notes,
         commands::upgrade_project,

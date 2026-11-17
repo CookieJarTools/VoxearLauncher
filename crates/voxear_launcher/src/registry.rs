@@ -219,6 +219,7 @@ mod tests {
             kind: InstallKind::Managed,
             installed: None,
             missing: false,
+            releases: None,
         }
     }
 

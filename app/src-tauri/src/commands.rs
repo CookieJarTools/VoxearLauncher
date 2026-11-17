@@ -13,9 +13,10 @@ use tauri::{AppHandle, Runtime, State};
 use tauri_plugin_updater::UpdaterExt;
 use voxear_launcher::manifest::SIGNATURE_SUFFIX;
 use voxear_launcher::new_project::{self, NewProject, Offer};
+use voxear_launcher::sources::{self, Ambiguous};
 use voxear_launcher::{
-    InstallKind, Layout, Module, Platform, Registry, Removed, Selector, Settings, Store, backup, fetch,
-    launcher_version, project, releases, self_update, upgrade, whisk,
+    Catalog, InstallKind, Layout, Module, Platform, Registry, Removed, Selector, Settings, Source, Store, backup,
+    launcher_version, project, self_update, upgrade, whisk,
 };
 
 use crate::dto::*;
@@ -25,6 +26,8 @@ pub struct Launcher {
     layout: Layout,
     platform: Platform,
     cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// Where the official releases are listed, when it isn't their usual place.
+    official: Option<String>,
 }
 
 impl Launcher {
@@ -34,7 +37,13 @@ impl Launcher {
     }
 
     pub fn with_layout(layout: Layout, platform: Platform) -> Self {
-        Self { layout, platform, cancels: Mutex::default() }
+        Self { layout, platform, cancels: Mutex::default(), official: None }
+    }
+
+    /// Lists the official releases from `url` instead of their usual place, as the tests do.
+    #[cfg(test)]
+    pub fn with_official_releases(self, url: impl Into<String>) -> Self {
+        Self { official: Some(url.into()), ..self }
     }
 
     fn store(&self) -> Store {
@@ -47,6 +56,19 @@ impl Launcher {
 
     fn registry(&self) -> Result<Registry> {
         Registry::load(self.layout.projects_file())
+    }
+
+    /// Every release list, the official one first.
+    fn sources(&self, settings: &Settings) -> Result<Vec<Source>> {
+        match &self.official {
+            Some(url) => settings.sources_with(url),
+            None => settings.sources(),
+        }
+    }
+
+    /// Every release list, fetched and checked.
+    fn catalog(&self, settings: &Settings) -> Result<Catalog> {
+        Ok(Catalog::load(self.sources(settings)?, &self.layout))
     }
 
     fn cancel_flag(&self, version: &str) -> Arc<AtomicBool> {
@@ -98,17 +120,15 @@ pub async fn app_info(launcher: Shared<'_>) -> Reply<AppInfo> {
 #[tauri::command]
 pub async fn list_installs(launcher: Shared<'_>) -> Reply<Vec<InstallDto>> {
     blocking(&launcher, |launcher| {
-        // The saved release list says which modules each version offers, without going online.
+        // The saved release lists say which modules each version offers, without going online.
         let settings = launcher.settings()?;
-        let manifest = match settings.releases_url() {
-            Some(source) => releases::cached(&source, &settings.trusted_keys()?, &launcher.layout),
-            None => None,
-        };
+        let catalog = Catalog::cached(launcher.sources(&settings)?, &launcher.layout);
+        let official = launcher.official.clone().unwrap_or_else(voxear_launcher::settings::official_url);
         let installs = launcher.store().list()?;
         Ok(installs
             .iter()
             .map(|install| {
-                let release = manifest.as_ref().and_then(|manifest| manifest.find(&install.version));
+                let release = catalog.of_install(install).map(|listed| listed.release);
                 // Each part the release offers, and any the install has anyway, such as one an older archive carried.
                 let modules = Module::ALL
                     .into_iter()
@@ -123,7 +143,8 @@ pub async fn list_installs(launcher: Shared<'_>) -> Reply<Vec<InstallDto>> {
                         })
                     })
                     .collect();
-                InstallDto { modules, ..InstallDto::from(install) }
+                let source = install.releases.as_deref().and_then(|url| settings.source_name(url, &official));
+                InstallDto { modules, source, ..InstallDto::from(install) }
             })
             .collect())
     })
@@ -134,59 +155,75 @@ pub async fn list_installs(launcher: Shared<'_>) -> Reply<Vec<InstallDto>> {
 pub async fn list_releases(launcher: Shared<'_>) -> Reply<ReleasesDto> {
     blocking(&launcher, |launcher| {
         let settings = launcher.settings()?;
-        let Some(source) = settings.releases_url() else {
-            return Ok(ReleasesDto { source: None, releases: Vec::new(), stale: None, unpublished: false });
-        };
-        let loaded = match releases::load(&source, &settings.trusted_keys()?, &launcher.layout) {
-            Ok(loaded) => loaded,
-            Err(error) if fetch::is_not_found(&error) => {
-                return Ok(ReleasesDto { source: Some(source), releases: Vec::new(), stale: None, unpublished: true });
-            }
-            Err(error) => return Err(error),
-        };
+        let catalog = launcher.catalog(&settings)?;
         let installs = launcher.store().list()?;
-        let releases = loaded
-            .manifest
+        let releases = catalog
             .available(launcher.platform)
             .into_iter()
-            .map(|release| {
+            .map(|listed| {
+                let release = listed.release;
                 let size = release.download(launcher.platform).map_or(0, |download| download.size);
                 let installed = installs.iter().any(|install| install.version == release.version);
-                ReleaseDto::new(release, launcher.platform, size, installed)
+                let source = (!listed.source.official).then(|| listed.source.name.clone());
+                ReleaseDto::new(release, launcher.platform, size, installed, source)
             })
             .collect();
-        Ok(ReleasesDto { source: Some(source), releases, stale: loaded.stale, unpublished: false })
+        let sources = catalog.listings.iter().map(SourceDto::from).collect();
+        Ok(ReleasesDto { sources, releases, nightlies: settings.nightlies_shown(&installs) })
     })
     .await
 }
 
-/// Installs the release `version` from the manifest, sending progress as it goes.
+/// Installs the release `version`, from the release list called `source` or else whichever list publishes it, sending
+/// progress as it goes.
 #[tauri::command]
 pub async fn install(
     launcher: Shared<'_>,
     version: String,
+    source: Option<String>,
     without: Option<Vec<Module>>,
     on_progress: Channel<ProgressDto>,
 ) -> Reply<InstallDto> {
     // Leaving `without` out installs every module the release offers.
     let without = without.unwrap_or_default();
     blocking(&launcher, move |launcher| {
-        let settings = launcher.settings()?;
-        let source = settings.releases_url().context("no release source is set; add one in Settings")?;
-        let keys = settings.trusted_keys()?;
-        let loaded = releases::load(&source, &keys, &launcher.layout)?;
+        let catalog = launcher.catalog(&launcher.settings()?)?;
         let selector: Selector = version.parse()?;
-        let release = loaded
-            .manifest
-            .select(&selector, launcher.platform)
-            .ok_or_else(|| anyhow!("Voxear {version} isn't in the release list"))?;
+        let listed = catalog.select(&selector, launcher.platform, source.as_deref()).map_err(choose_in_the_list)?;
+        let listed = listed.ok_or_else(|| not_listed(&catalog, &version))?;
         let cancel = launcher.cancel_flag(&version);
         let mut progress = |step| _ = on_progress.send(ProgressDto::from(step));
-        let result = launcher.store().install_without(release, &loaded.url, &keys, &without, &mut progress, &cancel);
+        let (release, keys) = (listed.release, &listed.source.keys);
+        let result = launcher.store().install_without(release, listed.url, keys, &without, &mut progress, &cancel);
         launcher.forget_cancel_flag(&version);
         Ok(InstallDto::from(&result?))
     })
     .await
+}
+
+/// Says where to choose when two release lists publish different engines as one version.
+fn choose_in_the_list(error: anyhow::Error) -> anyhow::Error {
+    match error.downcast_ref::<Ambiguous>() {
+        Some(ambiguous) => anyhow!("{ambiguous}; choose one in Install a version"),
+        None => error,
+    }
+}
+
+/// Why a version wasn't found: not listed, or in a list that couldn't be read.
+fn not_listed(catalog: &Catalog, version: &str) -> anyhow::Error {
+    let unread: Vec<String> = catalog
+        .listings
+        .iter()
+        .filter_map(|listing| match &listing.state {
+            sources::ListingState::Failed(error) => Some(format!("{}: {error:#}", listing.source.name)),
+            _ => None,
+        })
+        .collect();
+    if unread.is_empty() {
+        anyhow!("Voxear {version} isn't in the release lists")
+    } else {
+        anyhow!("Voxear {version} isn't in the release lists that could be read; couldn't read {}", unread.join("; "))
+    }
 }
 
 #[tauri::command]
@@ -370,7 +407,39 @@ pub async fn get_settings(launcher: Shared<'_>) -> Reply<Settings> {
 #[tauri::command]
 pub async fn save_settings(launcher: Shared<'_>, settings: Settings) -> Reply<()> {
     blocking(&launcher, move |launcher| {
-        settings.trusted_keys()?;
+        settings.check()?;
+        settings.save(&launcher.layout)
+    })
+    .await
+}
+
+/// Lists someone else's engine releases beside the official ones, once they have been read and their signature
+/// checked, so a wrong address or key shows at once. Saved straight away.
+#[tauri::command]
+pub async fn add_custom_releases(
+    launcher: Shared<'_>,
+    address: String,
+    name: Option<String>,
+    key: Option<String>,
+) -> Reply<AddedReleasesDto> {
+    blocking(&launcher, move |launcher| {
+        let mut settings = launcher.settings()?;
+        let added = settings.add_custom(&address, name.as_deref(), key.as_deref())?.clone();
+        let source = launcher.sources(&settings)?.into_iter().find(|source| source.name == added.name);
+        let source = source.context("the releases were just added")?;
+        let releases = sources::check(&source, &launcher.layout)?;
+        settings.save(&launcher.layout)?;
+        Ok(AddedReleasesDto { name: added.name, url: source.url, releases })
+    })
+    .await
+}
+
+/// Stops listing custom releases. Engines installed from them stay.
+#[tauri::command]
+pub async fn remove_custom_releases(launcher: Shared<'_>, name: String) -> Reply<()> {
+    blocking(&launcher, move |launcher| {
+        let mut settings = launcher.settings()?;
+        settings.remove_custom(&name)?;
         settings.save(&launcher.layout)
     })
     .await
@@ -399,9 +468,9 @@ pub async fn release_notes(launcher: Shared<'_>, from: Option<String>, to: Strin
     blocking(&launcher, move |launcher| {
         let from = from.map(|v| Version::parse(&v)).transpose()?;
         let to = Version::parse(&to)?;
-        let settings = launcher.settings()?;
-        let Some(source) = settings.releases_url() else { return Ok(Vec::new()) };
-        let Ok(loaded) = releases::load(&source, &settings.trusted_keys()?, &launcher.layout) else {
+        let catalog = launcher.catalog(&launcher.settings()?)?;
+        // The notes come from the list that publishes the version moved to.
+        let Some((_, loaded)) = catalog.loaded().find(|(_, loaded)| loaded.manifest.find(&to).is_some()) else {
             return Ok(Vec::new());
         };
         let notes = loaded.manifest.between(from.as_ref(), &to).into_iter().filter_map(|release| {
@@ -564,19 +633,17 @@ pub async fn add_module(
     on_progress: Channel<ProgressDto>,
 ) -> Reply<()> {
     blocking(&launcher, move |launcher| {
-        let settings = launcher.settings()?;
-        let source = settings.releases_url().context("no release source is set; add one in Settings")?;
-        let keys = settings.trusted_keys()?;
-        let loaded = releases::load(&source, &keys, &launcher.layout)?;
         let parsed = Version::parse(&version)?;
-        let release = loaded
-            .manifest
-            .find(&parsed)
-            .ok_or_else(|| anyhow!("Voxear {version} isn't in the release list, so its {name} can't be found"))?;
+        let install = launcher.store().get(&parsed)?.ok_or_else(|| anyhow!("Voxear {version} isn't installed"))?;
+        let catalog = launcher.catalog(&launcher.settings()?)?;
+        let listed = catalog
+            .of_install(&install)
+            .ok_or_else(|| anyhow!("Voxear {version} isn't in the release lists, so its {name} can't be found"))?;
         let key = format!("{version}+{}", name.name());
         let cancel = launcher.cancel_flag(&key);
         let mut progress = |step| _ = on_progress.send(ProgressDto::from(step));
-        let result = launcher.store().add_module(release, name, &loaded.url, &keys, &mut progress, &cancel);
+        let (release, keys) = (listed.release, &listed.source.keys);
+        let result = launcher.store().add_module(release, name, listed.url, keys, &mut progress, &cancel);
         launcher.forget_cancel_flag(&key);
         result.map(|_| ())
     })

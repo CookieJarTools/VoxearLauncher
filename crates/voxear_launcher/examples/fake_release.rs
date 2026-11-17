@@ -1,4 +1,4 @@
-//! Writes a folder of fake, signed engine releases, so the launcher can be tried before real releases exist.
+//! Writes a folder of fake, signed engine releases, so the launcher can be tried without real ones.
 //!
 //! ```text
 //! cargo run -p voxear_launcher --features testing --example fake_release -- /tmp/voxear-mirror
@@ -27,9 +27,15 @@ fn main() -> Result<()> {
     let manifest = releases.write();
     println!("Wrote fake releases to {}", dir.display());
     println!();
-    println!("Put this in settings.toml in the launcher's folder (or VOXUP_HOME) to use them:");
+    println!("To try the launcher with them in place of the official releases, put this in settings.toml in the");
+    println!("launcher's folder (or VOXUP_HOME):");
     println!();
-    println!("releases = {manifest:?}");
     println!("trusted_keys = [{:?}]", releases.key.public());
+    println!();
+    println!("and set VOXUP_RELEASES={manifest}");
+    println!();
+    println!("To list them beside the official releases instead, as custom releases:");
+    println!();
+    println!("voxup releases add {manifest} --name Fake --key {}", releases.key.public());
     Ok(())
 }

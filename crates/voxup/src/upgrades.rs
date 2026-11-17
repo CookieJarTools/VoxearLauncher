@@ -9,7 +9,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use semver::Version;
 use voxear_launcher::project::{self, ProjectInfo};
 use voxear_launcher::upgrade::{self, Direction, Event};
-use voxear_launcher::{Selector, backup, releases};
+use voxear_launcher::{Catalog, Selector, backup};
 
 use crate::Launcher;
 use crate::projects::install_exact;
@@ -88,9 +88,12 @@ pub fn upgrade(launcher: &Launcher, args: UpgradeArgs) -> Result<()> {
 
 /// Release notes for the versions passed through, when the release list can be read. Quietly empty if not.
 fn notes_between(launcher: &Launcher, from: Option<&Version>, to: &Version) -> Vec<(Version, String)> {
-    let Some(url) = launcher.settings.releases_url() else { return Vec::new() };
-    let Ok(keys) = launcher.keys() else { return Vec::new() };
-    let Ok(loaded) = releases::load(&url, &keys, &launcher.layout) else { return Vec::new() };
+    let Ok(sources) = launcher.sources() else { return Vec::new() };
+    let catalog = Catalog::load(sources, &launcher.layout);
+    // The notes come from the list that publishes the version moved to.
+    let Some((_, loaded)) = catalog.loaded().find(|(_, loaded)| loaded.manifest.find(to).is_some()) else {
+        return Vec::new();
+    };
     loaded
         .manifest
         .between(from, to)

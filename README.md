@@ -17,6 +17,8 @@ is to Unity.
   install it.
 - **Engine versions side by side.** Install stable, beta and nightly versions, keep as many as you like, and remove
   the ones no project uses. An engine you built yourself can be added too.
+- **Custom engine releases.** List someone else's engine releases, such as a fork's, beside the official ones.
+  Each one says where it came from, and a project made with one installs it from the right place.
 - **Safe downloads.** Before anything is unpacked, the launcher checks each engine download's size, its SHA-256
   checksum and its signature, so a damaged or tampered file is never installed.
 - **New projects from templates.** Pick a template, a name and a folder, and the engine sets the project up. You
@@ -92,6 +94,8 @@ Already have a Voxear project? Click **Add** on the **Projects** screen and choo
 | `voxup list --available` | Lists installed engine versions, and those you can install |
 | `voxup install stable` | Installs the newest stable version (or `beta`, `nightly`, or a version such as `0.3`) |
 | `voxup install 0.3 --without-manual` | Installs a version without the Voxear Manual (or `--without-server`, the Dedicated Server) |
+| `voxup install 0.3.0 --from Lumen` | Installs a version from custom releases, by name |
+| `voxup releases` | Lists where engine releases come from. `add <address> --key <key>` adds custom releases, such as a fork's; `remove <name>` takes them off; `nightlies on` lists nightlies |
 | `voxup server add 0.3.0` | Adds the Dedicated Server to an installed version (or `remove`; `voxup manual` does the same for the manual) |
 | `voxup uninstall 0.3.0` | Removes a version. It refuses while projects use it, unless you add `--force` |
 | `voxup locate <folder>` | Uses an engine installed somewhere else, such as one you built yourself |
@@ -148,11 +152,12 @@ whole flow without the real engine:
 cargo run -p voxear_launcher --features testing --example fake_release -- /tmp/voxear-mirror
 ```
 
-It prints two lines for the launcher's settings. To keep the trial away from your real launcher folder, put them in
+It prints what to put in the launcher's settings, and the `VOXUP_RELEASES` to set, so the fake releases stand in for
+the official ones. To keep the trial away from your real launcher folder, put the settings in
 `/tmp/voxup-home/settings.toml` and point `voxup` there:
 
 ```bash
-export VOXUP_HOME=/tmp/voxup-home
+export VOXUP_HOME=/tmp/voxup-home VOXUP_RELEASES=/tmp/voxear-mirror/releases.toml
 ```
 
 Then try `voxup list --available`, `voxup install stable`, `voxup new Orbit -l /tmp` and `voxup projects`. With

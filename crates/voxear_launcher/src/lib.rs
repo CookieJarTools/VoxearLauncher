@@ -2,6 +2,7 @@
 //! the `voxup` command line and the launcher window drive exactly the same code.
 //!
 //! - [`manifest`]: the signed engine release manifest, and picking a release from it.
+//! - [`sources`]: the official engine releases and custom ones, such as a fork's, merged into one list.
 //! - [`store`]: engine versions installed side by side, verified before they are unpacked.
 //! - [`registry`]: the project list, and which engine version each project needs.
 //! - [`new_project`]: the new-project flow, which runs the chosen engine's own `vox new`.
@@ -26,6 +27,7 @@ pub mod releases;
 pub mod self_update;
 pub mod settings;
 pub mod signing;
+pub mod sources;
 pub mod store;
 pub mod upgrade;
 pub mod whisk;
@@ -38,8 +40,9 @@ pub use layout::Layout;
 pub use manifest::{Download, Module, Release, ReleaseManifest};
 pub use platform::Platform;
 pub use registry::{Project, ProjectStatus, Registry};
-pub use settings::Settings;
+pub use settings::{CustomReleases, Settings};
 pub use signing::TrustedKeys;
+pub use sources::{Catalog, Listed, Source};
 pub use store::{Install, InstallKind, Progress, Removed, Store};
 
 /// This launcher's version. Releases that need a newer launcher say so in the manifest.
