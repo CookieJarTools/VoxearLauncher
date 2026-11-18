@@ -42,8 +42,8 @@ if [[ ${#want[@]} == 0 ]]; then
 fi
 
 # The launcher update key's public half: the one built into the core, or VOXEAR_LAUNCHER_UPDATE_KEY.
-pubkey="${VOXEAR_LAUNCHER_UPDATE_KEY:-$(sed -nE 's/^pub const LAUNCHER_UPDATE_KEY: Option<&str> = Some\("([^"]+)"\);$/\1/p' \
-  "$root/crates/voxear_launcher/src/self_update.rs")}"
+pubkey="${VOXEAR_LAUNCHER_UPDATE_KEY:-$(sed -n '/^pub const LAUNCHER_UPDATE_KEY/,/;$/p' \
+  "$root/crates/voxear_launcher/src/self_update.rs" | grep -oE '"[A-Za-z0-9+/=]{40,}"' | tr -d '"')}"
 if [[ -z "$pubkey" ]]; then
   echo "note: no launcher update key is built in, so these builds won't update themselves" >&2
 fi

@@ -305,7 +305,10 @@ mod tests {
             let comment = format!("timestamp:1793392749\tfile:Whisk_{signed_as}_amd64.AppImage\tversion:{signed_as}");
             let signature = STANDARD.encode(self.key.sign_with_comment(binary, &comment));
             let mut platforms = BTreeMap::new();
-            platforms.insert("linux-x86_64".to_owned(), PlatformUpdate { signature, url: "Whisk.AppImage".to_owned() });
+            platforms.insert(
+                "linux-x86_64".to_owned(),
+                PlatformUpdate { signature, url: "Whisk.AppImage".to_owned(), sha256: None, size: None },
+            );
             let manifest =
                 UpdateManifest { version: Version::parse(version).unwrap(), notes: None, pub_date: None, platforms };
             let path = site.join("latest.json");

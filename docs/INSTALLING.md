@@ -55,7 +55,7 @@ From a terminal, `voxear-launcher --update` does the same without opening the wi
 Every update is checked before anything is replaced:
 
 - Its size and SHA-256 must match the release's manifest.
-- It must be signed with the launcher update key, and the signature must name the version on offer, so an old
+- It must be signed with the release key, and the signature must name the version on offer, so an old
   build can't be passed off as a new one.
 - It must be newer than the running launcher.
 
@@ -86,47 +86,35 @@ or `%LOCALAPPDATA%\Voxear`. Your projects' own folders are never removed.
 
 ## Making a release
 
-The launcher update key signs every release. `voxear-release keygen --tauri ~/.voxear-keys/launcher` makes it,
-once. Its public key goes in `voxear_launcher::self_update::LAUNCHER_UPDATE_KEY`, and the private key stays out
-of every repository.
+The engine release key signs every launcher release, as it signs the engine. Its public key is built into
+`voxear_launcher::self_update::LAUNCHER_UPDATE_KEY`, and the secret key is a CI secret of the engine repository,
+so releases are made there.
 
-1. **Set the version.** It is written in four files; this sets them all:
+1. **Set the version** and commit it. It is written in four files; this sets them all:
 
    ```bash
    scripts/set-version.sh 0.2.0
    ```
 
-2. **Build the installers.** With `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` set,
-   each one gets a `.sig` beside it in `out/`:
+2. **Push** the launcher's `master`.
+3. **Run the Launcher Release workflow** in the engine repository (`CookieJarTools/Voxear`, Actions, Launcher
+   Release, Run workflow), with Publish ticked. It:
+   - builds the AppImage and `.deb` on Ubuntu 22.04, and the Windows setup and both `voxup` builds;
+   - signs each one with `voxear-release launcher add --key`, which writes `launcher/<channel>.json` with each
+     download's URL, signature, size and SHA-256;
+   - uploads them to a `launcher-v<version>` release of VoxearReleases, then publishes the manifest on its
+     `gh-pages` branch, in that order, so the manifest never offers a file that isn't there yet.
 
-   ```bash
-   scripts/build-installers.sh
-   ```
+   Without Publish ticked it only builds, and keeps the installers as the run's artifacts.
 
-   - On Linux this builds the AppImage and the `.deb`. It also builds the Windows setup if `makensis` and
-     `cargo-xwin` are installed.
-   - On Windows, run the same script from Git Bash.
-   - The **Installers** workflow in `.github/workflows` builds both platforms on GitHub's machines, when a
-     `launcher-v*` tag is pushed or when it is run by hand.
-   - Build the AppImage on the oldest distro you want it to run on, since it needs a glibc at least as new as the
-     build machine's. The workflow uses Ubuntu 22.04. An AppImage built on Arch only runs on recent distros.
+To make one by hand instead, build with `scripts/build-installers.sh`, then list each file:
 
-3. **List each installer in its channel**, once per platform:
+```bash
+cargo run -p voxear_release -- launcher add out/Voxear.Launcher_0.2.0_amd64.AppImage --site site --channel stable --version 0.2.0 --target linux-x86_64 --key ~/.voxear-keys/engine.key
+```
 
-   ```bash
-   cargo run -p voxear_release -- launcher add out/Voxear.Launcher_0.2.0_amd64.AppImage --site site --channel stable --version 0.2.0 --target linux-x86_64 --sig out/Voxear.Launcher_0.2.0_amd64.AppImage.sig --notes "What changed"
-   ```
-
-   ```bash
-   cargo run -p voxear_release -- launcher add out/Voxear.Launcher_0.2.0_x64-setup.exe --site site --channel stable --version 0.2.0 --target windows-x86_64 --sig out/Voxear.Launcher_0.2.0_x64-setup.exe.sig
-   ```
-
-   It checks the signature names the version, and writes `site/launcher/stable.json` with each download's URL,
-   signature, size and SHA-256.
-
-4. **Upload** the installers and their `.sig` files to a `launcher-v0.2.0` release on VoxearReleases.
-5. **Publish the manifest** by committing `site/launcher/` to VoxearReleases' `gh-pages` branch. Upload first,
-   so the manifest never offers a file that isn't there yet.
+Upload the files and their `.sig` files to the `launcher-v0.2.0` release, then commit `site/launcher/` to
+VoxearReleases' `gh-pages` branch.
 
 The manifest each launcher reads is at `https://cookiejartools.github.io/VoxearReleases/launcher/stable.json`
 (and `beta.json`):

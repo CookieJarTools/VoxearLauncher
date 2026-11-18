@@ -1,11 +1,6 @@
-# Builds the launcher's installers on both platforms and keeps them as workflow artifacts. Publishing stays a
-# manual step (docs/INSTALLING.md, "Making a release"), so nothing here uploads a release.
-#
-# Secrets, for signed builds that can update themselves:
-#   LAUNCHER_UPDATE_KEY            the launcher update key (the private key file's contents)
-#   LAUNCHER_UPDATE_KEY_PASSWORD   its password
-# Variable:
-#   LAUNCHER_UPDATE_PUBLIC_KEY     its public key, until it is built into self_update::LAUNCHER_UPDATE_KEY
+# Builds the launcher's installers on both platforms and keeps them as workflow artifacts, as a check. Releases
+# are signed and published by the Launcher Release workflow in the engine repository, which holds the release
+# key (docs/INSTALLING.md, "Making a release").
 name: Installers
 
 on:
@@ -27,9 +22,6 @@ jobs:
             os: windows-latest
     runs-on: ${{ matrix.os }}
     env:
-      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.LAUNCHER_UPDATE_KEY }}
-      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.LAUNCHER_UPDATE_KEY_PASSWORD }}
-      VOXEAR_LAUNCHER_UPDATE_KEY: ${{ vars.LAUNCHER_UPDATE_PUBLIC_KEY }}
       CARGO_INCREMENTAL: 0
     steps:
       - uses: actions/checkout@v4

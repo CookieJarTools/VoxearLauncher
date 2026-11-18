@@ -218,27 +218,21 @@ Everything is signed with **minisign** keys: Ed25519 over a BLAKE2b pre-hash. Th
 - The launcher's own updates use a **separate key**, so a leaked engine key can't push a launcher update, and
   the reverse.
 
-**Signing keys.** The engine key exists (`4B25CB4CB88433F4`, in `ENGINE_RELEASE_KEYS`) and is kept offline. The
-launcher key does not exist yet, so until it does the launcher can't update itself.
+**Signing keys.** One key signs everything: the engine release key, `4B25CB4CB88433F4`. It is in
+`ENGINE_RELEASE_KEYS`, and in Tauri's base64 form in `LAUNCHER_UPDATE_KEY`, so every build checks both engine
+releases and its own updates with nothing to set up. The secret half is kept offline and in the engine
+repository's CI secrets (`VOXEAR_ENGINE_KEY` and `VOXEAR_SIGNING_PASSWORD`), never in a repository.
 
-The secret keys belong offline or in CI secrets, never in a repository. `voxear-release` makes both (it asks for
-a password to encrypt each one):
-
-```bash
-cargo run -p voxear_release -- keygen ~/.voxear-keys/engine
-```
+`voxear-release` makes keys (it asks for a password to encrypt each one), for a new key or for trying the update
+flow with one of your own:
 
 ```bash
-cargo run -p voxear_release -- keygen ~/.voxear-keys/launcher --tauri
+cargo run -p voxear_release -- keygen ~/.voxear-keys/engine --tauri
 ```
 
-Each prints its public key:
-- the engine key's goes in `ENGINE_RELEASE_KEYS` in `crates/voxear_launcher/src/signing.rs`
-- the launcher key's, in Tauri's base64 form, goes in `LAUNCHER_UPDATE_KEY` in
-  `crates/voxear_launcher/src/self_update.rs`
-
-The launcher key is also what `tauri build` signs with, through `TAURI_SIGNING_PRIVATE_KEY`. `minisign -G` and
-`tauri signer generate` make compatible keys, if you'd rather use those.
+It prints the public key in both forms: the plain one for `ENGINE_RELEASE_KEYS` in
+`crates/voxear_launcher/src/signing.rs`, and the base64 one for `LAUNCHER_UPDATE_KEY` in
+`crates/voxear_launcher/src/self_update.rs`. `minisign -G` and `tauri signer generate` make compatible keys.
 
 ## Engine archives and `engine.toml`
 
@@ -626,8 +620,8 @@ points the launcher at another folder or URL.
 - An update must be newer than the running version.
 
 **The key.**
-- The launcher update key is built into `voxear_launcher::self_update::LAUNCHER_UPDATE_KEY`, beside the engine
-  release keys, and handed to Tauri's updater when the app starts.
+- The update key, which is the engine release key, is built into `voxear_launcher::self_update::LAUNCHER_UPDATE_KEY`
+  and handed to Tauri's updater when the app starts.
 - `tauri.conf.json` holds no key, so a build without one still starts; it just can't update itself.
 - A build can take a key through `VOXEAR_LAUNCHER_UPDATE_KEY` when it's compiled, for trying the update flow
   with a key of your own.

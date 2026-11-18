@@ -5,8 +5,8 @@
 //! Tauri's updater. A standalone `voxup` updates through this module, from the `voxup-<platform>` entries in the
 //! same file, which Tauri's updater ignores.
 //!
-//! Signatures are minisign, base64-encoded the way Tauri writes them, and are made with the launcher update key,
-//! not the engine release key. Their trusted comment must name the version the manifest announces: the
+//! Signatures are minisign, base64-encoded the way Tauri writes them, and are made with the engine release key,
+//! which also serves as the launcher update key. Their trusted comment must name the version the manifest announces: the
 //! manifest itself isn't signed, so this is what stops an old build being offered as a new one. Each download
 //! may also list its size and SHA-256, which are checked first, so a download that was cut short says so.
 //!
@@ -39,8 +39,11 @@ pub const UPDATES_BASE: &str = "https://cookiejartools.github.io/VoxearReleases/
 pub const UPDATES_VAR: &str = "VOXUP_LAUNCHER_UPDATES";
 
 /// The public key launcher updates are signed with, as `tauri signer generate` prints it (base64 of the
-/// minisign `.pub` file). Unset until the key is generated (see "Signing keys" in `docs/DESIGN.md`).
-pub const LAUNCHER_UPDATE_KEY: Option<&str> = None;
+/// minisign `.pub` file). It is the engine release key, 4B25CB4CB88433F4, so every build checks its updates
+/// without anything to set up, and one key in CI signs both the engine and the launcher.
+pub const LAUNCHER_UPDATE_KEY: Option<&str> = Some(
+    "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRCMjVDQjRDQjg4NDMzRjQKUldUME00UzRUTXNsUzFMZzRrNWpZNEtKOGRNcUVLaXBCRlJsUHpTNU0wSFMyK2p0Z2hzcGs3N2YK",
+);
 
 const MAX_MANIFEST: u64 = 1 << 20;
 

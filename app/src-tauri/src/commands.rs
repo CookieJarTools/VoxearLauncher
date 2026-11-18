@@ -15,8 +15,8 @@ use voxear_launcher::new_project::{self, NewProject, Offer};
 use voxear_launcher::self_update::UpdateChannel;
 use voxear_launcher::sources::{self, Ambiguous};
 use voxear_launcher::{
-    Catalog, InstallKind, Layout, Module, Platform, Registry, Removed, Selector, Settings, Source, Store, backup, fetch,
-    launcher_version, project, releases, self_install, self_update, upgrade, whisk,
+    Catalog, InstallKind, Layout, Module, Platform, Registry, Removed, Selector, Settings, Source, Store, backup,
+    project, self_install, upgrade, whisk,
 };
 
 use crate::dto::*;
