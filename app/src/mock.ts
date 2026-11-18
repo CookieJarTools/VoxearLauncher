@@ -1,7 +1,7 @@
 // An in-memory stand-in for the Rust core, used when the UI runs in a plain browser. It behaves like the real
 // commands closely enough to preview every screen: installs take a few seconds, and `vox new` reports steps.
 
-import type { Api, Backup, Direction, Install, Module, ModuleName, NewProjectForm, Offer, Progress, Project, Release, Settings } from './api'
+import type { Api, Backup, Direction, Install, Module, ModuleName, NewProjectForm, Offer, Progress, Project, Release, Settings, Whisk } from './api'
 
 const home = '/home/you'
 const engines = `${home}/.local/share/voxear/engines`
@@ -27,26 +27,31 @@ const offer: Offer = {
     { id: 'quality', name: 'Quality presets', description: 'Low, medium, high and ultra' }
   ],
   ides: [
+    { id: 'whisk', name: 'Whisk', description: '' },
     { id: 'rider', name: 'Rider', description: '' },
     { id: 'visual-studio', name: 'Visual Studio', description: '' },
     { id: 'vscode', name: 'VS Code', description: '' }
   ]
 }
 
+let whisk: Whisk = { installed: false, path: null, byLauncher: false }
+
 /** What's installed; `listInstalls` adds which modules each one has. */
 let installs: Omit<Install, 'modules'>[] = [
-  { version: '0.3.0-beta.1', channel: 'beta', path: `${engines}/0.3.0-beta.1`, located: false, missing: false, installed: ago(30 * hour) },
-  { version: '0.2.0', channel: 'stable', path: `${engines}/0.2.0`, located: false, missing: false, installed: ago(9 * 24 * hour) },
-  { version: '0.4.0-dev', channel: 'nightly', path: `${home}/Dev/Voxear/dist`, located: true, missing: false, installed: null }
+  { version: '0.3.0-beta.1', channel: 'beta', path: `${engines}/0.3.0-beta.1`, located: false, missing: false, installed: ago(30 * hour), source: null },
+  { version: '0.2.1+lumen', channel: 'stable', path: `${engines}/0.2.1+lumen`, located: false, missing: false, installed: ago(3 * 24 * hour), source: 'Lumen' },
+  { version: '0.2.0', channel: 'stable', path: `${engines}/0.2.0`, located: false, missing: false, installed: ago(9 * 24 * hour), source: null },
+  { version: '0.4.0-dev', channel: 'nightly', path: `${home}/Dev/Voxear/dist`, located: true, missing: false, installed: null, source: null }
 ]
 
 const releases: Omit<Release, 'installed' | 'modules'>[] = [
-  { version: '0.3.0-nightly.20261030', channel: 'nightly', published: ago(5 * hour), notes: null, size: 418_000_000, needsNewerLauncher: false },
-  { version: '0.3.0-nightly.20261029', channel: 'nightly', published: ago(29 * hour), notes: null, size: 417_000_000, needsNewerLauncher: false },
-  { version: '0.3.0-beta.1', channel: 'beta', published: ago(2 * 24 * hour), notes: 'https://example.invalid/0.3.0-beta.1', size: 405_000_000, needsNewerLauncher: false },
-  { version: '0.2.1', channel: 'stable', published: ago(4 * 24 * hour), notes: 'https://example.invalid/0.2.1', size: 392_000_000, needsNewerLauncher: false },
-  { version: '0.2.0', channel: 'stable', published: ago(20 * 24 * hour), notes: 'https://example.invalid/0.2.0', size: 391_000_000, needsNewerLauncher: false },
-  { version: '0.1.0', channel: 'stable', published: ago(60 * 24 * hour), notes: null, size: 350_000_000, needsNewerLauncher: false }
+  { version: '0.3.0-nightly.20261030', channel: 'nightly', published: ago(5 * hour), notes: null, size: 418_000_000, needsNewerLauncher: false, source: null },
+  { version: '0.3.0-nightly.20261029', channel: 'nightly', published: ago(29 * hour), notes: null, size: 417_000_000, needsNewerLauncher: false, source: null },
+  { version: '0.3.0-beta.1', channel: 'beta', published: ago(2 * 24 * hour), notes: 'https://example.invalid/0.3.0-beta.1', size: 405_000_000, needsNewerLauncher: false, source: null },
+  { version: '0.2.1+lumen', channel: 'stable', published: ago(3 * 24 * hour), notes: null, size: 395_000_000, needsNewerLauncher: false, source: 'Lumen' },
+  { version: '0.2.1', channel: 'stable', published: ago(4 * 24 * hour), notes: 'https://example.invalid/0.2.1', size: 392_000_000, needsNewerLauncher: false, source: null },
+  { version: '0.2.0', channel: 'stable', published: ago(20 * 24 * hour), notes: 'https://example.invalid/0.2.0', size: 391_000_000, needsNewerLauncher: false, source: null },
+  { version: '0.1.0', channel: 'stable', published: ago(60 * 24 * hour), notes: null, size: 350_000_000, needsNewerLauncher: false, source: null }
 ]
 
 let projects: Project[] = [
@@ -57,7 +62,9 @@ let projects: Project[] = [
   { path: '/run/media/you/USB/Tidepool', name: 'Tidepool', engine: '0.2.0', status: { kind: 'missing' }, favourite: false, added: ago(90 * 24 * hour), opened: ago(60 * 24 * hour) }
 ]
 
-let settings: Settings = { releases: 'https://releases.example.invalid/voxear/releases.toml' }
+let settings: Settings = {
+  custom_releases: [{ name: 'Lumen', url: 'https://lumen.github.io/VoxearReleases/engine/releases.toml', key: 'RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3' }]
+}
 const modules: Module[] = [
   { name: 'manual', title: 'Voxear Manual', size: 18_400_000 },
   { name: 'server', title: 'Dedicated Server', size: 9_200_000 }
@@ -139,22 +146,28 @@ export const mockApi: Api = {
     }),
   listReleases: async () => {
     await wait(350)
+    const custom = settings.custom_releases ?? []
     return {
-      source: settings.releases ?? null,
-      releases: releases.map((release) => ({
-        ...release,
-        installed: installs.some((i) => i.version === release.version),
-        modules: offersModules(release.version) ? modules : []
-      })),
-      stale: null,
-      unpublished: false
+      sources: [
+        { name: 'Official', url: 'https://cookiejartools.github.io/VoxearReleases/engine/releases.toml', official: true, state: 'listed', error: null },
+        ...custom.map((list) => ({ name: list.name, url: list.url, official: false, state: 'listed' as const, error: null }))
+      ],
+      releases: releases
+        .filter((release) => release.source === null || custom.some((list) => list.name === release.source))
+        .map((release) => ({
+          ...release,
+          installed: installs.some((i) => i.version === release.version),
+          modules: offersModules(release.version) ? modules : []
+        })),
+      nightlies: settings.nightlies ?? installs.some((install) => install.channel === 'nightly')
     }
   },
-  install: async (version, without, onProgress) => {
-    const release = releases.find((r) => r.version === version) ?? releases.find((r) => r.channel === version)
-    if (!release) throw { message: `Voxear ${version} isn't in the release list`, cancelled: false }
+  install: async (version, source, without, onProgress) => {
+    const fromList = releases.filter((r) => source === null || (r.source ?? 'Official') === source)
+    const release = fromList.find((r) => r.version === version) ?? fromList.find((r) => r.channel === version)
+    if (!release) throw { message: `Voxear ${version} isn't in the release lists`, cancelled: false }
     await simulateInstall(version, release.size, onProgress)
-    const install = { version: release.version, channel: release.channel, path: `${engines}/${release.version}`, located: false, missing: false, installed: new Date().toISOString() }
+    const install = { version: release.version, channel: release.channel, path: `${engines}/${release.version}`, located: false, missing: false, installed: new Date().toISOString(), source: release.source }
     installs.push(install)
     for (const module of modules) {
       if (offersModules(release.version) && !without.includes(module.name)) withModule[module.name].add(release.version)
@@ -171,13 +184,13 @@ export const mockApi: Api = {
   removeModule: async (version, name) => void withModule[name].delete(version),
   installFile: async (path, onProgress) => {
     await simulateInstall(path, 300_000_000, onProgress)
-    const install: Install = { version: '0.5.0-beta.1', channel: 'beta', path: `${engines}/0.5.0-beta.1`, located: false, missing: false, installed: new Date().toISOString(), modules: [] }
+    const install: Install = { version: '0.5.0-beta.1', channel: 'beta', path: `${engines}/0.5.0-beta.1`, located: false, missing: false, installed: new Date().toISOString(), modules: [], source: null }
     installs.push(install)
     sortInstalls()
     return install
   },
   locate: async (path) => {
-    const install: Install = { version: '0.4.1-dev', channel: 'nightly', path, located: true, missing: false, installed: null, modules: [] }
+    const install: Install = { version: '0.4.1-dev', channel: 'nightly', path, located: true, missing: false, installed: null, modules: [], source: null }
     installs.push(install)
     sortInstalls()
     return install
@@ -293,8 +306,31 @@ export const mockApi: Api = {
     await wait(400)
     location.reload()
   },
+  whiskStatus: async () => whisk,
+  installWhisk: async (onProgress) => {
+    await simulateInstall('whisk', 89_000_000, onProgress)
+    whisk = { installed: true, path: `${home}/.local/share/voxear/tools/whisk/Whisk.AppImage`, byLauncher: true }
+    return whisk
+  },
+  openWhisk: async () => {},
+  removeWhisk: async () => {
+    whisk = { installed: false, path: null, byLauncher: false }
+    return whisk
+  },
   getSettings: async () => ({ ...settings }),
   saveSettings: async (next) => void (settings = { ...next }),
+  addCustomReleases: async (address, name, key) => {
+    await wait(600)
+    const github = address.match(/^(?:https:\/\/github\.com\/)?([\w.-]+)\/([\w.-]+)\/?$/)
+    const url = github ? `https://${github[1].toLowerCase()}.github.io/${github[2]}/engine/releases.toml` : address.trim()
+    const named = name?.trim() || (github ? github[1] : new URL(url).host)
+    if ((settings.custom_releases ?? []).some((list) => list.name.toLowerCase() === named.toLowerCase()))
+      throw { message: `there are custom releases called ${named} already`, cancelled: false }
+    settings = { ...settings, custom_releases: [...(settings.custom_releases ?? []), { name: named, url, ...(key ? { key } : {}) }] }
+    return { name: named, url, releases: 3 }
+  },
+  removeCustomReleases: async (name) =>
+    void (settings = { ...settings, custom_releases: (settings.custom_releases ?? []).filter((list) => list.name !== name) }),
   pickFolder: async (_title, defaultPath) => window.prompt('Folder', defaultPath ?? home),
   pickFile: async () => window.prompt('Archive', `${home}/Downloads/voxear-0.5.0-beta.1-linux-x86_64.tar.zst`),
   reveal: async () => {},

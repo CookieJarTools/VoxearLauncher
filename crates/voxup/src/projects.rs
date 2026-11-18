@@ -95,24 +95,21 @@ pub fn open(launcher: &Launcher, folder: &Path, install_missing: bool) -> Result
     Ok(())
 }
 
+/// Installs exactly `version`, from whichever release list publishes it.
 pub fn install_exact(launcher: &Launcher, version: &str) -> Result<Install> {
     let selector: Selector = version.parse()?;
-    let releases = launcher.releases()?;
+    let catalog = launcher.catalog()?;
     let platform = launcher.store.platform();
-    let release = releases
-        .manifest
-        .select(&selector, platform)
-        .ok_or_else(|| anyhow!("Voxear {version} isn't in the release list for {platform}"))?;
+    let listed =
+        catalog.select(&selector, platform, None).map_err(|error| crate::engines::which_list(error, version))?;
+    let listed = listed.ok_or_else(|| anyhow!("Voxear {version} isn't in the release lists for {platform}"))?;
     let mut bar = InstallBar::new();
-    let install = launcher.store.install(
-        release,
-        &releases.url,
-        &launcher.keys()?,
-        &mut |p| bar.update(p),
-        &AtomicBool::new(false),
-    )?;
+    let keys = &listed.source.keys;
+    let install =
+        launcher.store.install(listed.release, listed.url, keys, &mut |p| bar.update(p), &AtomicBool::new(false))?;
     bar.finish();
-    ui::done(&format!("Installed Voxear {}", install.version));
+    let from = if listed.source.official { String::new() } else { format!(" from {}", listed.source.name) };
+    ui::done(&format!("Installed Voxear {}{from}", install.version));
     Ok(install)
 }
 

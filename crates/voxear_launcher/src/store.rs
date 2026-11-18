@@ -52,6 +52,9 @@ pub struct Install {
     pub installed: Option<Timestamp>,
     /// A located install whose folder has gone, for example from a drive that isn't mounted.
     pub missing: bool,
+    /// The release list it was installed from: that list's manifest address. Unknown for an engine installed from
+    /// a file or located, and for installs from before it was recorded, which came from the official releases.
+    pub releases: Option<String>,
 }
 
 impl Install {
@@ -110,10 +113,21 @@ struct Receipt {
     version: Version,
     channel: Channel,
     platform: String,
-    /// The manifest URL or archive path it came from.
+    /// The archive's URL or path.
     source: String,
+    /// The release manifest that listed it, when it came from one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    releases: Option<String>,
     sha256: String,
     installed: Timestamp,
+}
+
+/// Where an archive came from, for its receipt.
+struct Origin {
+    /// The archive's URL or path.
+    source: String,
+    /// The release manifest that listed it.
+    releases: Option<String>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -239,7 +253,7 @@ impl Store {
             self.unpack_and_commit(
                 &engine.file,
                 Some((version, release.channel)),
-                engine.url.clone(),
+                Origin { source: engine.url.clone(), releases: Some(manifest_url.to_owned()) },
                 sha256,
                 &modules,
                 progress,
@@ -339,7 +353,7 @@ impl Store {
         keys.verify_file(archive, signature)
             .with_context(|| format!("{} failed its signature check", archive.display()))?;
         let source = fsutil::absolute(archive)?.to_string_lossy().into_owned();
-        self.unpack_and_commit(archive, None, source, sha256_file(archive)?, &[], progress)
+        self.unpack_and_commit(archive, None, Origin { source, releases: None }, sha256_file(archive)?, &[], progress)
     }
 
     /// Records an engine that lives somewhere else, such as one built from source. Its files are never
@@ -371,6 +385,7 @@ impl Store {
             kind: InstallKind::Located,
             installed: None,
             missing: false,
+            releases: None,
         })
     }
 
@@ -397,7 +412,7 @@ impl Store {
         &self,
         archive_path: &Path,
         expected: Option<(&Version, Channel)>,
-        source: String,
+        origin: Origin,
         sha256: String,
         modules: &[(Module, &Path)],
         progress: &mut dyn FnMut(Progress),
@@ -443,7 +458,8 @@ impl Store {
             version: info.version,
             channel: info.channel,
             platform: info.platform,
-            source,
+            source: origin.source,
+            releases: origin.releases,
             sha256,
             installed: Timestamp::now(),
         };
@@ -496,6 +512,7 @@ impl Store {
                 path: entry.path,
                 kind: InstallKind::Located,
                 installed: None,
+                releases: None,
             }
         });
         Ok(installs.collect())
@@ -588,6 +605,7 @@ fn managed_install(receipt: Receipt, path: PathBuf) -> Install {
         kind: InstallKind::Managed,
         installed: Some(receipt.installed),
         missing: false,
+        releases: receipt.releases,
     }
 }
 
@@ -778,6 +796,7 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].version, v("0.3.0"));
         assert!(listed[0].installed.is_some());
+        assert_eq!(listed[0].releases.as_deref(), Some(fixture.fake.url().as_str()), "it remembers the list");
 
         assert!(matches!(steps.first(), Some(Progress::Downloading { done: 0, .. })));
         assert!(steps.contains(&Progress::Verifying));
@@ -1111,6 +1130,7 @@ mod tests {
         let install = fixture.store.install_archive(&path, &signature, &keys, &mut |_| {}).unwrap();
         assert_eq!(install.version, v("0.5.0-beta.1"));
         assert_eq!(install.channel, Channel::Beta);
+        assert_eq!(install.releases, None, "it came from no list");
         assert!(fixture.store.install_archive(&path, &signature, &keys, &mut |_| {}).is_err(), "only once");
 
         let unsigned = TestKey::generate().sign(&archive);

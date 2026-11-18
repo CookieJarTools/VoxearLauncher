@@ -43,6 +43,15 @@ export async function openProject(project: Project) {
   }
 }
 
+/** Opens a project's folder in Whisk, the code editor. */
+export async function openInWhisk(project: Project) {
+  try {
+    await api.openWhisk(project.path)
+  } catch (error) {
+    report(error)
+  }
+}
+
 export async function addProject() {
   const folder = await api.pickFolder('Add a Voxear project', store().info?.defaultLocation)
   if (!folder) return

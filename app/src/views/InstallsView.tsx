@@ -155,13 +155,20 @@ function InstallRow({ install, index, size, home }: { install: Install; index: n
         ) : install.located ? (
           <span className="tag">Located</span>
         ) : (
-          install.modules
-            .filter((module) => module.installed)
-            .map((module) => (
-              <span key={module.name} className="tag" title={module.title}>
-                {MODULE_TAGS[module.name]}
+          <>
+            {install.source && (
+              <span className="tag" title={`From ${install.source}`}>
+                {install.source}
               </span>
-            ))
+            )}
+            {install.modules
+              .filter((module) => module.installed)
+              .map((module) => (
+                <span key={module.name} className="tag" title={module.title}>
+                  {MODULE_TAGS[module.name]}
+                </span>
+              ))}
+          </>
         )}
       </div>
       <span className="cell cell-size row-meta">{size !== undefined ? bytes(size) : ''}</span>

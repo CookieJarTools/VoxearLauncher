@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { api, type ModuleName, type Release, type ReleaseChannel } from '../api'
+import { api, failure, type ModuleName, type Release, type ReleaseChannel, type ReleaseSource } from '../api'
 import { Icon } from '../components/Icon'
 import { Rich } from '../components/Rich'
 import { ago, bytes } from '../lib/format'
@@ -20,6 +20,7 @@ export function InstallSheet() {
   const error = useStore((s) => s.releasesError)
   const loading = useStore((s) => s.releasesLoading)
   const loadReleases = useStore((s) => s.loadReleases)
+  const toast = useStore((s) => s.toast)
   const [channel, setChannel] = useState<ReleaseChannel>('stable')
 
   const counts = useMemo(() => {
@@ -27,12 +28,24 @@ export function InstallSheet() {
     for (const release of releases?.releases ?? []) counts[release.channel]++
     return counts
   }, [releases])
+  // Nightlies show when the setting says, or once one is installed.
+  const channels = useMemo(() => CHANNELS.filter((c) => c.id !== 'nightly' || releases?.nightlies), [releases])
 
   // Start on stable, or on the first channel that has anything.
   useEffect(() => {
     if (!open || !releases) return
-    if (counts.stable === 0) setChannel(CHANNELS.find((c) => counts[c.id] > 0)?.id ?? 'stable')
-  }, [open, releases, counts])
+    if (counts.stable === 0) setChannel(channels.find((c) => counts[c.id] > 0)?.id ?? 'stable')
+  }, [open, releases, counts, channels])
+
+  const showNightlies = async () => {
+    try {
+      await api.saveSettings({ ...(await api.getSettings()), nightlies: true })
+      setChannel('nightly')
+      void loadReleases()
+    } catch (error) {
+      toast('error', failure(error).message)
+    }
+  }
 
   useEffect(() => {
     if (!open) return
@@ -42,9 +55,11 @@ export function InstallSheet() {
   }, [open, setOpen])
 
   if (!open) return null
-  const shown = (releases?.releases ?? []).filter((release) => release.channel === channel)
-  const noSource = releases !== null && releases.source === null
-  const unpublished = releases?.unpublished === true
+  // A channel the list no longer shows, such as nightlies just turned off, falls back to stable.
+  const current = channels.some((c) => c.id === channel) ? channel : 'stable'
+  const shown = (releases?.releases ?? []).filter((release) => release.channel === current)
+  const sources = releases?.sources ?? []
+  const unpublished = sources.length > 0 && sources.every((source) => source.state === 'unpublished')
 
   return (
     <div className="overlay" onMouseDown={() => setOpen(false)}>
@@ -58,11 +73,11 @@ export function InstallSheet() {
             <Icon name="close" size={15} />
           </button>
         </div>
-        {!noSource && !unpublished && (
+        {!unpublished && (
           <div className="dialog-body" style={{ paddingBottom: 12, overflow: 'visible' }}>
             <div className="segmented">
-              {CHANNELS.map((c) => (
-                <button key={c.id} className={channel === c.id ? 'on' : ''} onClick={() => setChannel(c.id)}>
+              {channels.map((c) => (
+                <button key={c.id} className={current === c.id ? 'on' : ''} onClick={() => setChannel(c.id)}>
                   {c.label}
                   <span className="count">{counts[c.id] || ''}</span>
                 </button>
@@ -82,22 +97,18 @@ export function InstallSheet() {
               </button>
             </div>
           )}
-          {releases?.stale && (
-            <div className="banner">
-              <Icon name="info" size={15} />
-              <span>Couldn't check for new releases, so this is the list from last time. {releases.stale}</span>
-            </div>
-          )}
-          {noSource && <NoSource onClose={() => setOpen(false)} />}
+          {sources.map((source) => (
+            <SourceProblem key={source.name} source={source} />
+          ))}
           {unpublished && <Unpublished />}
           {!releases && loading && <p className="hint" style={{ padding: 12 }}>Checking for releases…</p>}
-          {releases && !noSource && !unpublished && shown.length === 0 && (
+          {releases && !unpublished && shown.length === 0 && (
             <p className="hint" style={{ padding: 12 }}>
-              Nothing in the {channel} channel yet.
+              Nothing in the {current} channel yet.
             </p>
           )}
           {shown.map((release) => (
-            <ReleaseRow key={release.version} release={release} />
+            <ReleaseRow key={`${release.source ?? ''}/${release.version}`} release={release} />
           ))}
         </div>
         <div className="dialog-foot">
@@ -110,10 +121,12 @@ export function InstallSheet() {
             Locate an engine…
           </button>
           <div className="spacer" />
-          {releases?.source && (
-            <span className="hint" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={releases.source}>
-              Every download is verified
-            </span>
+          {releases && !releases.nightlies && counts.nightly > 0 ? (
+            <button className="btn btn-ghost btn-sm" onClick={() => void showNightlies()}>
+              Show nightlies
+            </button>
+          ) : (
+            releases && <span className="hint">Every download is verified</span>
           )}
         </div>
       </div>
@@ -130,7 +143,14 @@ function ReleaseRow({ release }: { release: Release }) {
   return (
     <div className="release">
       <div className="grow">
-        <span className="release-version">Voxear {release.version}</span>
+        <span className="release-version">
+          Voxear {release.version}
+          {release.source && (
+            <span className="tag" style={{ marginLeft: 8 }} title={`From ${release.source}`}>
+              {release.source}
+            </span>
+          )}
+        </span>
         <span className="release-meta">
           {ago(release.published)} · {bytes(release.size)}
           {release.notes && (
@@ -176,7 +196,7 @@ function ReleaseRow({ release }: { release: Release }) {
         ) : job ? (
           <span className="chip">{job.state === 'queued' ? 'Waiting' : 'Installing…'}</span>
         ) : (
-          <button className="btn btn-sm" onClick={() => queueInstall(release.version, without)}>
+          <button className="btn btn-sm" onClick={() => queueInstall(release.version, without, release.source ?? 'Official')}>
             <Icon name="download" size={14} />
             Install
           </button>
@@ -208,26 +228,18 @@ function Unpublished() {
   )
 }
 
-function NoSource({ onClose }: { onClose: () => void }) {
-  const setView = useStore((s) => s.setView)
+/** A release list that couldn't be read, or only from the copy saved last time. */
+function SourceProblem({ source }: { source: ReleaseSource }) {
+  if (source.state !== 'failed' && source.state !== 'stale') return null
+  const which = source.official ? 'the official releases' : source.name
+  const failed = source.state === 'failed'
   return (
-    <div className="empty" style={{ marginTop: 32 }}>
-      <h2>No release source yet</h2>
-      <p>
-        Voxear releases aren't published yet. Point the launcher at a release folder or URL in Settings, or install an
-        engine archive from a file.
-      </p>
-      <div className="empty-actions">
-        <button
-          className="btn btn-primary"
-          onClick={() => {
-            onClose()
-            setView('settings')
-          }}
-        >
-          Open Settings
-        </button>
-      </div>
+    <div className={failed ? 'banner banner-error' : 'banner'} title={source.url}>
+      <Icon name={failed ? 'alert' : 'info'} size={15} />
+      <span style={{ flex: 1 }}>
+        {failed ? `Couldn't read ${which}. ` : `Couldn't check ${which}, so this is the list from last time. `}
+        {source.error && <Rich text={source.error} />}
+      </span>
     </div>
   )
 }

@@ -4,22 +4,25 @@
 mod engines;
 mod projects;
 mod selfupdate;
+mod sources;
 mod ui;
 mod upgrades;
+mod whisk;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use voxear_launcher::fetch;
-use voxear_launcher::releases::{self, Releases};
-use voxear_launcher::{Layout, Module, Platform, Registry, Settings, Store, TrustedKeys};
+use voxear_launcher::sources::ListingState;
+use voxear_launcher::{Catalog, Layout, Module, Platform, Registry, Settings, Source, Store, TrustedKeys};
 
 #[derive(Parser)]
 #[command(name = "voxup", version, about = "Install Voxear engine versions, and create and open projects")]
 struct Cli {
-    /// Where engine releases are listed, instead of the settings: an https:// URL or a releases.toml path.
+    /// Where the official engine releases are listed, instead of their usual place: an https:// URL or a
+    /// releases.toml path. Custom releases are still listed beside them.
     #[arg(long, global = true, value_name = "URL")]
     releases: Option<String>,
     #[command(subcommand)]
@@ -47,6 +50,9 @@ enum Command {
         /// Leave out the Dedicated Server, the program server builds ship; without it they use the player.
         #[arg(long)]
         without_server: bool,
+        /// Install from these releases, by name, such as custom releases (see `voxup releases`).
+        #[arg(long, value_name = "NAME", conflicts_with = "file")]
+        from: Option<String>,
     },
     /// Add the Voxear Manual to an installed version, or remove it.
     #[command(subcommand)]
@@ -94,6 +100,14 @@ enum Command {
     /// The launcher's own updates.
     #[command(name = "self", subcommand)]
     SelfCommand(selfupdate::SelfCommand),
+    /// Where engine releases come from: the official ones, nightlies, and custom ones such as a fork's.
+    Releases {
+        #[command(subcommand)]
+        command: Option<sources::ReleasesCommand>,
+    },
+    /// Whisk, the code editor Voxear opens scripts in: install, open or remove it.
+    #[command(subcommand)]
+    Whisk(whisk::WhiskCommand),
     /// Show the templates, setup and IDEs an engine version offers for new projects.
     Templates {
         /// The engine version to ask (default: the newest stable one installed).
@@ -120,10 +134,10 @@ fn run(cli: Cli) -> Result<()> {
     let launcher = Launcher::new(cli.releases)?;
     match cli.command {
         Command::List { available } => engines::list(&launcher, available),
-        Command::Install { version, file, without_manual, without_server } => {
+        Command::Install { version, file, without_manual, without_server, from } => {
             let left_out = [(without_manual, Module::Manual), (without_server, Module::Server)];
             let without = left_out.into_iter().filter(|(leave, _)| *leave).map(|(_, module)| module).collect();
-            engines::install(&launcher, version, file, without)
+            engines::install(&launcher, version, file, without, from.as_deref())
         }
         Command::Manual(command) => engines::module(&launcher, Module::Manual, command),
         Command::Server(command) => engines::module(&launcher, Module::Server, command),
@@ -138,6 +152,8 @@ fn run(cli: Cli) -> Result<()> {
         Command::Backups { folder } => upgrades::backups(&launcher, folder.as_deref()),
         Command::Restore { backup } => upgrades::restore(&launcher, &backup),
         Command::SelfCommand(command) => selfupdate::run(&launcher, command),
+        Command::Releases { command } => sources::run(&launcher, command.unwrap_or(sources::ReleasesCommand::List)),
+        Command::Whisk(command) => whisk::run(&launcher, command),
         Command::Templates { engine } => projects::templates(&launcher, engine.as_deref()),
     }
 }
@@ -147,16 +163,17 @@ pub struct Launcher {
     pub layout: Layout,
     pub settings: Settings,
     pub store: Store,
-    releases_url: Option<String>,
+    /// Where the official releases are listed, when `--releases` says.
+    official: Option<String>,
 }
 
 impl Launcher {
-    fn new(releases_url: Option<String>) -> Result<Self> {
+    fn new(official: Option<String>) -> Result<Self> {
         let layout = Layout::from_env()?;
         let settings = Settings::load(&layout)?;
         let platform = Platform::current().ok_or_else(|| anyhow!("Voxear isn't built for this platform"))?;
         let store = Store::new(layout.clone(), platform);
-        Ok(Self { layout, settings, store, releases_url })
+        Ok(Self { layout, settings, store, official })
     }
 
     pub fn keys(&self) -> Result<TrustedKeys> {
@@ -167,20 +184,54 @@ impl Launcher {
         Registry::load(self.layout.projects_file())
     }
 
-    /// The release manifest, verified. Warns when only the saved copy could be used.
-    pub fn releases(&self) -> Result<Releases> {
-        let url = self.releases_url.clone().or_else(|| self.settings.releases_url()).with_context(|| {
-            format!(
-                "no release source is set yet; set `releases` in {}, set VOXUP_RELEASES, or pass --releases",
-                ui::pretty(&self.layout.settings_file())
-            )
-        })?;
-        let releases = releases::load(&url, &self.keys()?, &self.layout).map_err(|error| {
-            if fetch::is_not_found(&error) { error.context("no engine releases are published yet") } else { error }
-        })?;
-        if let Some(reason) = &releases.stale {
-            ui::warn(&format!("couldn't check for new releases, so this is the list from last time: {reason}"));
+    /// Where the official releases are listed.
+    pub fn official(&self) -> String {
+        self.official.clone().unwrap_or_else(voxear_launcher::settings::official_url)
+    }
+
+    /// Every release list: the official one, then custom ones.
+    pub fn sources(&self) -> Result<Vec<Source>> {
+        match &self.official {
+            Some(url) => self.settings.sources_with(url),
+            None => self.settings.sources(),
         }
-        Ok(releases)
+    }
+
+    /// Every release list, verified. Warns about a list that couldn't be read, or only from its saved copy, and
+    /// fails when no list could be read at all.
+    pub fn catalog(&self) -> Result<Catalog> {
+        let mut catalog = Catalog::load(self.sources()?, &self.layout);
+        let any = catalog.loaded().next().is_some();
+        for listing in &catalog.listings {
+            let source = &listing.source;
+            let from = if source.official { String::new() } else { format!(" from {}", source.name) };
+            match &listing.state {
+                ListingState::Loaded(releases) => {
+                    if let Some(reason) = &releases.stale {
+                        ui::warn(&format!(
+                            "couldn't check for new releases{from}, so this is the list from last time: {reason}"
+                        ));
+                    }
+                }
+                ListingState::Failed(error) if any || !source.official => {
+                    let which = if source.official {
+                        "the official releases".to_owned()
+                    } else {
+                        format!("the releases{from}")
+                    };
+                    ui::warn(&format!("couldn't read {which}: {error:#}"))
+                }
+                _ => {}
+            }
+        }
+        if !any {
+            let official = catalog.listings.remove(0);
+            return Err(match official.state {
+                ListingState::Failed(error) => error,
+                _ => anyhow::Error::new(fetch::NotFound(official.source.url))
+                    .context("no engine releases are published yet"),
+            });
+        }
+        Ok(catalog)
     }
 }

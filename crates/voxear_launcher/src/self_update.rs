@@ -276,7 +276,7 @@ pub fn update_voxup(
     Ok(VoxupUpdate::Updated { from: current.clone(), to: manifest.version })
 }
 
-fn download_to(url: &str, dest: &Path, progress: &mut dyn FnMut(u64, Option<u64>)) -> Result<()> {
+pub(crate) fn download_to(url: &str, dest: &Path, progress: &mut dyn FnMut(u64, Option<u64>)) -> Result<()> {
     let fetched = fetch::open(url)?;
     let mut reader = fetched.reader;
     let mut file = File::create(dest).with_context(|| format!("couldn't write {}", dest.display()))?;
@@ -296,13 +296,13 @@ fn download_to(url: &str, dest: &Path, progress: &mut dyn FnMut(u64, Option<u64>
 }
 
 #[cfg(unix)]
-fn make_executable(path: &Path) -> Result<()> {
+pub(crate) fn make_executable(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).context("couldn't make the update executable")
 }
 
 #[cfg(not(unix))]
-fn make_executable(_path: &Path) -> Result<()> {
+pub(crate) fn make_executable(_path: &Path) -> Result<()> {
     Ok(())
 }
 

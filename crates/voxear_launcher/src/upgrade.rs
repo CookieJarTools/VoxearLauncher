@@ -217,6 +217,7 @@ mod tests {
                 kind: InstallKind::Located,
                 installed: None,
                 missing: false,
+                releases: None,
             }
         }
 

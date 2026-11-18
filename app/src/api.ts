@@ -31,6 +31,8 @@ export interface Install {
   installed: string | null
   /** Optional parts, such as the manual and the Dedicated Server: what's in the install, and what its release offers. */
   modules: InstallModule[]
+  /** The custom releases it was installed from, by name; null for the official ones. */
+  source: string | null
 }
 
 /** The optional parts of an install. */
@@ -60,14 +62,49 @@ export interface Release {
   installed: boolean
   needsNewerLauncher: boolean
   modules: Module[]
+  /** The custom releases that publish it, by name; null for the official ones. */
+  source: string | null
+}
+
+/** One release list: the official releases, or custom ones such as a fork's. */
+export interface ReleaseSource {
+  name: string
+  url: string
+  official: boolean
+  /** `stale` is the saved copy, shown because a fresh one couldn't be fetched. */
+  state: 'listed' | 'stale' | 'unpublished' | 'failed'
+  /** Why it couldn't be read, or why the saved copy is shown. */
+  error: string | null
 }
 
 export interface Releases {
-  source: string | null
+  /** Every release list, the official one first. */
+  sources: ReleaseSource[]
+  /** The releases of every list, newest first. */
   releases: Release[]
-  stale: string | null
-  /** Nothing has been published at the source yet. */
-  unpublished: boolean
+  /** Whether nightly builds are shown. */
+  nightlies: boolean
+}
+
+/** Someone else's engine releases, as the settings file keeps them. */
+export interface CustomReleases {
+  name: string
+  url: string
+  key?: string
+}
+
+/** Custom releases just added, and how many releases they have; null when nothing is published there yet. */
+export interface AddedReleases {
+  name: string
+  url: string
+  releases: number | null
+}
+
+/** Whisk, the code editor scripts open in: where it is, and whether the launcher installed it and so can remove it. */
+export interface Whisk {
+  installed: boolean
+  path: string | null
+  byLauncher: boolean
 }
 
 export type UpdateStatus =
@@ -130,7 +167,9 @@ export interface NewProjectForm {
 
 /** The launcher's settings file, as stored. */
 export interface Settings {
-  releases?: string
+  /** Unset, nightlies show once one is installed. */
+  nightlies?: boolean
+  custom_releases?: CustomReleases[]
   trusted_keys?: string[]
   project_location?: string
   launcher_channel?: 'stable' | 'beta'
@@ -193,7 +232,8 @@ export interface Api {
   appInfo(): Promise<AppInfo>
   listInstalls(): Promise<Install[]>
   listReleases(): Promise<Releases>
-  install(version: string, without: ModuleName[], onProgress: (progress: Progress) => void): Promise<Install>
+  /** From the release list called `source`, or whichever list publishes the version when it is null. */
+  install(version: string, source: string | null, without: ModuleName[], onProgress: (progress: Progress) => void): Promise<Install>
   addModule(version: string, name: ModuleName, onProgress: (progress: Progress) => void): Promise<void>
   removeModule(version: string, name: ModuleName): Promise<void>
   cancelInstall(version: string): Promise<void>
@@ -212,6 +252,9 @@ export interface Api {
   createProject(version: string, form: NewProjectForm, onStep: (step: string) => void): Promise<string>
   getSettings(): Promise<Settings>
   saveSettings(settings: Settings): Promise<void>
+  /** Reads someone else's releases, checks their signature, and lists them beside the official ones. */
+  addCustomReleases(address: string, name: string | null, key: string | null): Promise<AddedReleases>
+  removeCustomReleases(name: string): Promise<void>
   upgradeChoices(path: string): Promise<UpgradeChoices>
   releaseNotes(from: string | null, to: string): Promise<ReleaseNote[]>
   upgradeProject(path: string, version: string, allowDowngrade: boolean, onEvent: (event: UpgradeEvent) => void): Promise<UpgradeReport>
@@ -223,6 +266,11 @@ export interface Api {
   restartLauncher(): Promise<void>
   /** Copies this AppImage into the app menu, then reopens the launcher from there. */
   installLauncherApp(): Promise<void>
+  whiskStatus(): Promise<Whisk>
+  installWhisk(onProgress: (progress: Progress) => void): Promise<Whisk>
+  /** Opens Whisk, on a project's folder when one is given. */
+  openWhisk(path: string | null): Promise<void>
+  removeWhisk(): Promise<Whisk>
   pickFolder(title: string, defaultPath?: string): Promise<string | null>
   pickFile(title: string, name: string, extensions: string[]): Promise<string | null>
   reveal(path: string): Promise<void>
@@ -242,7 +290,7 @@ const tauriApi: Api = {
   appInfo: () => invoke('app_info'),
   listInstalls: () => invoke('list_installs'),
   listReleases: () => invoke('list_releases'),
-  install: (version, without, onProgress) => invoke('install', { version, without, onProgress: channel(onProgress) }),
+  install: (version, source, without, onProgress) => invoke('install', { version, source, without, onProgress: channel(onProgress) }),
   addModule: (version, name, onProgress) => invoke('add_module', { version, name, onProgress: channel(onProgress) }),
   removeModule: (version, name) => invoke('remove_module', { version, name }),
   cancelInstall: (version) => invoke('cancel_install', { version }),
@@ -261,6 +309,8 @@ const tauriApi: Api = {
   createProject: (version, form, onStep) => invoke('create_project', { version, form, onStep: channel(onStep) }),
   getSettings: () => invoke('get_settings'),
   saveSettings: (settings) => invoke('save_settings', { settings }),
+  addCustomReleases: (address, name, key) => invoke('add_custom_releases', { address, name, key }),
+  removeCustomReleases: (name) => invoke('remove_custom_releases', { name }),
   upgradeChoices: (path) => invoke('upgrade_choices', { path }),
   releaseNotes: (from, to) => invoke('release_notes', { from, to }),
   upgradeProject: (path, version, allowDowngrade, onEvent) =>
@@ -272,6 +322,10 @@ const tauriApi: Api = {
   installLauncherUpdate: (onProgress) => invoke('install_launcher_update', { onProgress: channel(onProgress) }),
   restartLauncher: () => invoke('restart_launcher'),
   installLauncherApp: () => invoke('install_launcher_app'),
+  whiskStatus: () => invoke('whisk_status'),
+  installWhisk: (onProgress) => invoke('install_whisk', { onProgress: channel(onProgress) }),
+  openWhisk: (path) => invoke('open_whisk', { path }),
+  removeWhisk: () => invoke('remove_whisk'),
   pickFolder: async (title, defaultPath) => {
     const picked = await open({ directory: true, title, defaultPath })
     return typeof picked === 'string' ? picked : null

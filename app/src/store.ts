@@ -1,6 +1,6 @@
 import type { MouseEvent } from 'react'
 import { create } from 'zustand'
-import { api, failure, type AppInfo, type Install, type ModuleName, type Progress, type Project, type Releases, type UpdateStatus } from './api'
+import { api, failure, type AppInfo, type Install, type ModuleName, type Progress, type Project, type Releases, type UpdateStatus, type Whisk } from './api'
 import type { IconName } from './components/Icon'
 
 export type View = 'projects' | 'installs' | 'settings'
@@ -16,6 +16,8 @@ export interface Job {
   error?: string
   /** For a release: the optional modules to leave out. */
   without?: ModuleName[]
+  /** For a release: the list to install it from, by name; unset, whichever list publishes it. */
+  source?: string | null
   /** For a module: which version it goes into, which module, and what it's called. */
   version?: string
   module?: ModuleName
@@ -69,12 +71,14 @@ interface State {
   /** The project whose backups are shown. */
   backupsOf: Project | null
   launcherUpdate: LauncherUpdate
+  /** Whisk, the code editor, as the last refresh found it. */
+  whisk: Whisk | null
 
   setView(view: View): void
   init(): Promise<void>
   refresh(): Promise<void>
   loadReleases(): Promise<void>
-  queueInstall(version: string, without?: ModuleName[]): void
+  queueInstall(version: string, without?: ModuleName[], source?: string | null): void
   queueModule(version: string, name: ModuleName, title: string): void
   retryJob(key: string): void
   queueFile(path: string): void
@@ -115,7 +119,9 @@ export const useStore = create<State>((set, get) => {
         get().toast('ok', `Added the ${job.title} to Voxear ${job.version}`)
       } else {
         const install =
-          job.kind === 'release' ? await api.install(job.key, job.without ?? [], onProgress) : await api.installFile(job.key, onProgress)
+          job.kind === 'release'
+            ? await api.install(job.key, job.source ?? null, job.without ?? [], onProgress)
+            : await api.installFile(job.key, onProgress)
         set((state) => ({ jobs: state.jobs.filter((j) => j.key !== job.key) }))
         get().toast('ok', `Installed Voxear ${install.version}`, {
           label: 'New project',
@@ -163,6 +169,7 @@ export const useStore = create<State>((set, get) => {
     upgrading: null,
     backupsOf: null,
     launcherUpdate: { state: 'idle', status: null, checkedAt: null },
+    whisk: null,
 
     setView: (view) => set({ view }),
 
@@ -188,6 +195,8 @@ export const useStore = create<State>((set, get) => {
       } catch (error) {
         get().toast('error', failure(error).message)
       }
+      // Quietly: the lists matter more than where Whisk is.
+      api.whiskStatus().then((whisk) => set({ whisk }), () => {})
     },
 
     loadReleases: async () => {
@@ -201,8 +210,8 @@ export const useStore = create<State>((set, get) => {
       }
     },
 
-    queueInstall: (version, without = []) =>
-      enqueue({ key: version, label: `Voxear ${version}`, kind: 'release', state: 'queued', progress: null, without }),
+    queueInstall: (version, without = [], source = null) =>
+      enqueue({ key: version, label: `Voxear ${version}`, kind: 'release', state: 'queued', progress: null, without, source }),
 
     queueModule: (version, name, title) =>
       enqueue({

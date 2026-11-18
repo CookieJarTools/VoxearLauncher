@@ -11,6 +11,7 @@
 //!   downloads/               archives while they download
 //!   staging/                 archives while they unpack, renamed into engines/ when complete
 //!   trash/                   engines being removed
+//!   tools/whisk/             Whisk, the code editor, when the launcher installed it (Linux)
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -81,6 +82,11 @@ impl Layout {
 
     pub fn trash(&self) -> PathBuf {
         self.root.join("trash")
+    }
+
+    /// Programs the launcher installs beside the engines, such as Whisk.
+    pub fn tools(&self) -> PathBuf {
+        self.root.join("tools")
     }
 
     pub fn lock_file(&self) -> PathBuf {

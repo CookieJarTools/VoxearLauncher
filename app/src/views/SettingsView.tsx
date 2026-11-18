@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { api, failure, type Settings } from '../api'
-import { ProgressBar } from '../components/Bits'
+import { api, failure, type CustomReleases, type Progress, type Settings } from '../api'
+import { phaseText, ProgressBar, Switch } from '../components/Bits'
 import { Icon } from '../components/Icon'
 import { ago, bytes, pretty } from '../lib/format'
 import { useStore } from '../store'
@@ -10,7 +10,6 @@ export function SettingsView() {
   const info = useStore((s) => s.info)
   const toast = useStore((s) => s.toast)
   const [saved, setSaved] = useState<Settings | null>(null)
-  const [releases, setReleases] = useState('')
   const [keys, setKeys] = useState('')
   const [location, setLocation] = useState('')
   const [saving, setSaving] = useState(false)
@@ -19,7 +18,6 @@ export function SettingsView() {
     api.getSettings().then(
       (settings) => {
         setSaved(settings)
-        setReleases(settings.releases ?? '')
         setKeys((settings.trusted_keys ?? []).join('\n'))
         setLocation(settings.project_location ?? '')
       },
@@ -28,7 +26,6 @@ export function SettingsView() {
   }, [toast])
 
   const next: Settings = {
-    releases: releases.trim() || undefined,
     trusted_keys: keys
       .split('\n')
       .map((key) => key.trim())
@@ -37,14 +34,13 @@ export function SettingsView() {
   }
   const dirty =
     saved !== null &&
-    ((saved.releases ?? '') !== (next.releases ?? '') ||
-      (saved.trusted_keys ?? []).join('\n') !== (next.trusted_keys ?? []).join('\n') ||
+    ((saved.trusted_keys ?? []).join('\n') !== (next.trusted_keys ?? []).join('\n') ||
       (saved.project_location ?? '') !== (next.project_location ?? ''))
 
   const save = async () => {
     setSaving(true)
     try {
-      // Keeps what this form doesn't edit, such as the launcher channel.
+      // Keeps what this form doesn't edit, such as the launcher channel and custom releases.
       const merged = { ...(await api.getSettings()), ...next }
       await api.saveSettings(merged)
       setSaved(merged)
@@ -57,11 +53,6 @@ export function SettingsView() {
     } finally {
       setSaving(false)
     }
-  }
-
-  const browseReleases = async () => {
-    const file = await api.pickFile('Choose a releases.toml', 'Release manifest', ['toml'])
-    if (file) setReleases(file)
   }
 
   const browseLocation = async () => {
@@ -81,25 +72,7 @@ export function SettingsView() {
         <div className="settings">
           <div className="settings-section">
             <h2>Engine releases</h2>
-            <div className="field">
-              <span className="label">Release source</span>
-              <div className="input-row">
-                <input
-                  className="input"
-                  value={releases}
-                  placeholder="https://…/releases.toml, or a releases.toml on disk"
-                  onChange={(e) => setReleases(e.target.value)}
-                  spellCheck={false}
-                />
-                <button className="btn" onClick={() => void browseReleases()}>
-                  Browse
-                </button>
-              </div>
-              <span className="hint">
-                Where engine versions are listed. Official releases aren't published yet, so for now this points at a release
-                folder. VOXUP_RELEASES overrides it.
-              </span>
-            </div>
+            <ReleaseLists />
             <label className="field">
               <span className="label">Extra trusted keys</span>
               <textarea
@@ -109,10 +82,7 @@ export function SettingsView() {
                 onChange={(e) => setKeys(e.target.value)}
                 spellCheck={false}
               />
-              <span className="hint">
-                Every manifest and download must be signed by a trusted key. Add keys here for engine builds you host
-                yourself.
-              </span>
+              <span className="hint">Trusted for every release list, and for archives installed from a file.</span>
             </label>
           </div>
 
@@ -135,6 +105,8 @@ export function SettingsView() {
               <span className="hint">The last folder you created a project in is remembered here.</span>
             </div>
           </div>
+
+          <WhiskSection />
 
           <LauncherUpdates />
 
@@ -170,6 +142,169 @@ export function SettingsView() {
       </div>
     </section>
   )
+}
+
+/** Where engine releases come from: the official ones, always listed; nightlies; and custom releases, such as a fork's.
+ * Each change saves at once, as the launcher's channel does. */
+function ReleaseLists() {
+  const toast = useStore((s) => s.toast)
+  const installs = useStore((s) => s.installs)
+  const home = useStore((s) => s.info?.userHome)
+  const [settings, setSettings] = useState<Settings | null>(null)
+  const [adding, setAdding] = useState(false)
+  const [address, setAddress] = useState('')
+  const [key, setKey] = useState('')
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    api.getSettings().then(setSettings, (error) => toast('error', failure(error).message))
+  }, [toast])
+
+  // Unset, nightlies show once one is installed.
+  const nightlies = settings?.nightlies ?? installs.some((install) => install.channel === 'nightly')
+  const lists = settings?.custom_releases ?? []
+
+  const reload = async () => {
+    setSettings(await api.getSettings())
+    void useStore.getState().loadReleases()
+  }
+
+  const setNightlies = async (on: boolean) => {
+    try {
+      await api.saveSettings({ ...(await api.getSettings()), nightlies: on })
+      await reload()
+    } catch (error) {
+      toast('error', failure(error).message)
+    }
+  }
+
+  const close = () => {
+    setAdding(false)
+    setAddress('')
+    setKey('')
+    setName('')
+    setError(null)
+  }
+
+  const add = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const added = await api.addCustomReleases(address.trim(), name.trim() || null, key.trim() || null)
+      const found = added.releases === null ? 'nothing published yet' : `${added.releases} ${added.releases === 1 ? 'release' : 'releases'}`
+      toast('ok', `Added ${added.name} · ${found}`)
+      close()
+      await reload()
+    } catch (error) {
+      setError(failure(error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remove = async (list: CustomReleases) => {
+    const ok = await useStore.getState().confirm({
+      title: `Remove ${list.name}?`,
+      message: 'Its releases stop showing in the list. Engines installed from it stay.',
+      confirm: 'Remove',
+      danger: true
+    })
+    if (!ok) return
+    try {
+      await api.removeCustomReleases(list.name)
+      await reload()
+      toast('ok', `Removed ${list.name}`)
+    } catch (error) {
+      toast('error', failure(error).message)
+    }
+  }
+
+  const browse = async () => {
+    const file = await api.pickFile('Choose a releases.toml', 'Release manifest', ['toml'])
+    if (file) setAddress(file)
+  }
+
+  return (
+    <>
+      <button className="switch-row" style={{ margin: '-6px -10px' }} onClick={() => void setNightlies(!nightlies)} disabled={!settings}>
+        <span className="text">
+          Nightlies
+          <small>Builds of the newest engine, made each night</small>
+        </span>
+        <Switch on={nightlies} />
+      </button>
+      <div className="field">
+        <span className="label">Custom engine releases</span>
+        {lists.map((list) => (
+          <div key={list.name} className="input-row" style={{ alignItems: 'center' }}>
+            <span className="release-version">{list.name}</span>
+            <span className="hint" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={list.url}>
+              {shortAddress(list.url, home)}
+            </span>
+            {list.key && <span className="tag">Own key</span>}
+            <button className="btn btn-sm btn-ghost" onClick={() => void remove(list)}>
+              Remove
+            </button>
+          </div>
+        ))}
+        {adding ? (
+          <div className="field" style={{ gap: 10 }}>
+            <label className="field">
+              <span className="label">Address</span>
+              <div className="input-row">
+                <input
+                  className="input"
+                  value={address}
+                  placeholder="owner/repo, or https://…/releases.toml"
+                  onChange={(e) => setAddress(e.target.value)}
+                  spellCheck={false}
+                  autoFocus
+                />
+                <button className="btn" onClick={() => void browse()}>
+                  Browse
+                </button>
+              </div>
+            </label>
+            <label className="field">
+              <span className="label">Public key</span>
+              <input className="input" value={key} placeholder="RW…" onChange={(e) => setKey(e.target.value)} spellCheck={false} />
+            </label>
+            <label className="field">
+              <span className="label">Name</span>
+              <input className="input" value={name} placeholder="From the address" onChange={(e) => setName(e.target.value)} spellCheck={false} />
+            </label>
+            {error && <span className="error-text">{error}</span>}
+            <div className="input-row">
+              <button className="btn btn-primary btn-sm" onClick={() => void add()} disabled={busy || !address.trim()}>
+                {busy ? 'Checking…' : 'Add'}
+              </button>
+              <button className="btn btn-sm btn-ghost" onClick={close} disabled={busy}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <button className="btn btn-sm" onClick={() => setAdding(true)} disabled={!settings}>
+              <Icon name="plus" size={14} />
+              Add
+            </button>
+          </div>
+        )}
+        <span className="hint">Someone else's releases, such as a fork of the engine, listed beside the official ones.</span>
+      </div>
+    </>
+  )
+}
+
+/** A release list's address, short: a GitHub Pages site as owner/repo, a site without its manifest's path. */
+function shortAddress(url: string, home: string | undefined): string {
+  const pages = url.match(/^https:\/\/([^./]+)\.github\.io\/([^/]+)\/engine\/releases\.toml$/)
+  if (pages) return `${pages[1]}/${pages[2]}`
+  if (url.startsWith('https://')) return url.slice('https://'.length).replace(/\/engine\/releases\.toml$/, '')
+  return pretty(url, home)
 }
 
 /** The launcher's own updates: its channel, a check, and what the last check found. */
@@ -240,6 +375,75 @@ function LauncherUpdates() {
       {update.state === 'downloading' && (
         <ProgressBar progress={update.total ? { phase: 'downloading', done: update.done, total: update.total } : null} />
       )}
+    </div>
+  )
+}
+
+/** Whisk, the code editor Voxear opens scripts in: install it, open it, or remove the copy the launcher installed. */
+function WhiskSection() {
+  const info = useStore((s) => s.info)
+  const whisk = useStore((s) => s.whisk)
+  const toast = useStore((s) => s.toast)
+  const [progress, setProgress] = useState<Progress | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const run = async (work: () => Promise<void>) => {
+    setBusy(true)
+    try {
+      await work()
+    } catch (error) {
+      toast('error', failure(error).message)
+    } finally {
+      setBusy(false)
+      setProgress(null)
+    }
+  }
+  const install = () =>
+    run(async () => {
+      const found = await api.installWhisk(setProgress)
+      useStore.setState({ whisk: found })
+      toast('ok', 'Whisk is installed')
+    })
+  const remove = () =>
+    run(async () => {
+      useStore.setState({ whisk: await api.removeWhisk() })
+      toast('ok', 'Removed Whisk')
+    })
+  const open = () => run(() => api.openWhisk(null))
+
+  let status = 'Not installed.'
+  if (busy && progress) status = phaseText(progress, false)
+  else if (whisk?.installed && whisk.path) status = info ? pretty(whisk.path, info.userHome) : whisk.path
+
+  return (
+    <div className="settings-section">
+      <h2>Code editor</h2>
+      <div className="field">
+        <span className="label">Whisk</span>
+        <div className="input-row" style={{ alignItems: 'center' }}>
+          <span className="hint" style={{ flex: 1 }} title={whisk?.path ?? undefined}>
+            {status}
+          </span>
+          {whisk?.installed ? (
+            <>
+              <button className="btn btn-sm" onClick={() => void open()} disabled={busy}>
+                Open
+              </button>
+              {whisk.byLauncher && (
+                <button className="btn btn-sm btn-ghost" onClick={() => void remove()} disabled={busy}>
+                  Remove
+                </button>
+              )}
+            </>
+          ) : (
+            <button className="btn btn-primary btn-sm" onClick={() => void install()} disabled={busy}>
+              {busy ? 'Installing…' : 'Install'}
+            </button>
+          )}
+        </div>
+        {busy && progress && <ProgressBar progress={progress} />}
+        <span className="hint">The editor opens scripts in Whisk. It keeps itself up to date once installed.</span>
+      </div>
     </div>
   )
 }

@@ -45,8 +45,8 @@ The engine's principles apply here as well. Three matter most:
  │ React UI · Tauri commands + events  │   │ clap · progress bars        │
  └──────────────────┬──────────────────┘   └──────────────┬──────────────┘
  ┌──────────────────┴────────── voxear_launcher (core) ───┴──────────────┐
- │ manifest · releases · signing · fetch · archive · store · registry    │
- │ project · new_project · settings · layout                             │
+ │ manifest · releases · sources · signing · fetch · archive · store     │
+ │ registry · project · new_project · settings · layout                  │
  └──────────────────┬───────────────────────────────────┬────────────────┘
           release mirror (https / file)        engine installs: bin/vox new …
 ```
@@ -160,6 +160,35 @@ Releases without a download for this platform are skipped.
 **Nightly pruning.** The publisher keeps only the last 30 nightlies in the manifest. Projects pinned to an older
 nightly still open while it is installed.
 
+## Release lists
+
+The official releases are always listed. **Custom releases** add someone else's, such as those of a fork of the
+engine: another `releases.toml` in the same format, published the same way, usually by the engine's own release
+workflow run from the fork. Each list is fetched, checked and saved for offline use on its own (`sources`), and the
+engine list merges them, newest first, saying which list each release came from.
+
+- **Addresses.** Custom releases can be given as their `releases.toml` (an `https://` URL or a file), the site or
+  folder it is in (`<site>/engine/releases.toml`, as `voxear-release` writes a site, or `<folder>/releases.toml`), or
+  the GitHub repository they publish from: `owner/repo` or `https://github.com/owner/repo` means
+  `https://owner.github.io/repo/engine/releases.toml`. The settings keep the manifest's own address.
+- **Keys.** A list's manifest and archives must be signed by the built-in engine keys, by `trusted_keys`, or by the
+  list's own `key`. A list's own key is trusted for that list alone, so a fork's key can't sign anything in the
+  official list.
+- **One version, one engine.** An install is its version, and a project pins a version, so a version number has to
+  mean one engine. A release two lists publish with the same archive (a mirror) shows once, under the first list.
+  When two lists publish different engines under one version, both show, and installing that version needs the
+  list named: `voxup install <version> --from <name>`, or the row picked in the window. Forks are best off giving
+  their builds versions of their own, with build metadata: `0.2.0+lumen`, `0.3.0-nightly.20261117+lumen`.
+- **Finding a version.** An exact version, such as a project's pin, is looked for in every list, so a project made
+  with a fork's engine installs from the fork. A channel or a range (`stable`, `0.3`) picks from the official
+  releases, or from the first list after them that has a match, unless `--from` names the list.
+- **Where an install came from.** The receipt keeps the address of the list an engine was installed from
+  (`releases`), so the window and `voxup list` can say so, and an optional part added later comes from the same
+  list.
+- **A list that can't be read** is reported on its own; the others are still listed.
+- **Nightlies** show in the engine list when `nightlies` is on. Unset, they show once a nightly is installed.
+  `voxup install nightly` and a project pinned to a nightly work either way.
+
 ## Signing and verification
 
 Everything is signed with **minisign** keys: Ed25519 over a BLAKE2b pre-hash. They can be made with the
@@ -183,7 +212,9 @@ Everything is signed with **minisign** keys: Ed25519 over a BLAKE2b pre-hash. Th
 - The engine release keys are built into the launcher, in `signing::ENGINE_RELEASE_KEYS`.
 - A signature names the key that made it, so rotating keys means adding the new key in one launcher release
   and retiring the old one later.
-- `trusted_keys` in the settings adds more keys, for self-hosted engine builds.
+- `trusted_keys` in the settings adds more keys, trusted for every release list and for archives installed from a
+  file.
+- Custom releases can bring a `key` of their own, trusted for that list alone.
 - The launcher's own updates use a **separate key**, so a leaked engine key can't push a launcher update, and
   the reverse.
 
@@ -270,6 +301,7 @@ treated that way.
   downloads/                    archives while they download (*.part)
   staging/                      archives while they unpack
   trash/                        engines being removed
+  tools/whisk/Whisk.AppImage    Whisk, when the launcher installed it (Linux)
   store.lock                    held while installs change
 ```
 
@@ -518,6 +550,25 @@ vox new <folder> --name <name> --template <id>
 
 The launcher adds the new project to the list, shows each step as it arrives, and offers to open it.
 
+## Whisk
+
+Whisk, the code editor the engine's editor opens scripts and projects in, is installed beside the engines rather
+than with one: one copy serves every engine version, and Whisk updates itself. Core: `voxear_launcher::whisk`.
+
+- **Releases.** Whisk's own GitHub releases, described by `latest.json` in the format Tauri's updater reads, keyed
+  by the same platform names as engine releases. `VOXUP_WHISK_UPDATES` overrides where it is read from.
+- **Checks.** Each download is checked against Whisk's update key, built into the launcher, and its trusted
+  comment must name the version the manifest announces, as for the launcher's own updates.
+- **Linux.** The AppImage goes to `tools/whisk/Whisk.AppImage`. If nothing yet says where Whisk is,
+  `~/.whisk/install-path` is written too; Whisk rewrites that file each time it starts, and the editor reads it.
+- **Windows.** Whisk's per-user installer runs silently (`/S`) and Whisk lands in `%LOCALAPPDATA%\Whisk`.
+- **Finding it.** The launcher's copy, then `~/.whisk/install-path` (or another Whisk AppImage in that folder when
+  the recorded one has gone), then `/usr/bin/whisk` from Whisk's packages, or on Windows the folder Whisk's
+  installer records under `HKCU\Software\CookieJarTools\Whisk`.
+- **Opening.** `whisk <folder> [<file>[:<line>]…]`. A running Whisk takes the arguments and the new process quits.
+  Started from the launcher's AppImage, Whisk gets the environment the launcher was started with.
+- **Removing** takes away only the launcher's copy. A Whisk installed any other way is left alone.
+
 ## Launcher self-update
 
 The launcher updates itself from **its own manifest, signed with its own key**, separately from engine versions.
@@ -738,24 +789,36 @@ testing the core never needs Node.
 `settings.toml`, in the launcher folder:
 
 ```toml
-releases = "https://…/releases.toml"   # where engine releases are listed
-trusted_keys = ["RWQ…"]                 # extra keys for self-hosted engine builds
+nightlies = true                        # list nightly builds; unset, they show once one is installed
+trusted_keys = ["RWQ…"]                 # extra keys, for every release list and for archives from a file
 project_location = "/home/jeo/VoxearProjects"   # remembered from the last new project
 launcher_channel = "beta"               # launcher updates: stable (the default) or beta
+
+[[custom_releases]]                     # someone else's releases, listed beside the official ones
+name = "Lumen"
+url = "https://lumen.github.io/VoxearReleases/engine/releases.toml"
+key = "RWQ…"                            # optional: the key their releases are signed with
 ```
 
-With nothing set, engine releases come from `https://cookiejartools.github.io/VoxearReleases/engine/releases.toml`.
-Until something is published there, the launcher says no releases are published yet, rather than reporting an
-error.
+The official releases are always listed, from `https://cookiejartools.github.io/VoxearReleases/engine/releases.toml`.
+Until something is published at a list, the launcher says nothing is published there yet, rather than reporting an
+error. `voxup releases` lists, adds and removes custom releases and turns nightlies on and off; the window does the
+same in Settings. Adding custom releases reads them first, so a wrong address or key shows at once.
+
+**The old `releases` setting**, from before engine releases were published, named one list that took the place of
+the official one. A saved value moves over when the settings are read: the official list's own address is dropped,
+and anything else becomes custom releases, named after where they are, and is saved that way the next time the
+settings are saved. Its keys were in `trusted_keys`, which still apply.
 
 | Variable | Effect |
 |---|---|
 | `VOXUP_HOME` | Moves the whole launcher folder (portable setups, tests). |
-| `VOXUP_RELEASES` | Overrides where engine releases are listed. `--releases` does the same for one command. |
+| `VOXUP_RELEASES` | Lists the official releases from somewhere else, such as a mirror or a test folder. `--releases` does the same for one command. Custom releases are still listed beside them. |
 | `VOXUP_LAUNCHER_UPDATES` | Overrides where the launcher's update manifests are read from: an `https://` URL, `http://` on this machine, or (for `voxup`) a folder. |
+| `VOXUP_WHISK_UPDATES` | Overrides where Whisk's release manifest is read from. |
 | `VOXEAR_HOME` | Set by the launcher for every engine process it starts. |
 
-Release sources are `https://` URLs or local paths (`file://` URLs or plain paths). Plain HTTP is refused.
+Release lists are `https://` URLs or local paths (`file://` URLs or plain paths). Plain HTTP is refused.
 
 ## What the engine needs to change
 
@@ -800,6 +863,7 @@ These are the engine-side parts of the contract. The launcher stubs them in its 
 |---|---|
 | Release manifest: parsing, validation, selection | Done, tested |
 | Signature checks, rollback protection, offline cache | Done, tested |
+| Release lists: official, nightlies, custom releases such as a fork's, merged | Done, tested; `voxup releases` and Settings |
 | Install, list, remove, locate, offline archives; atomic, locked | Done, tested |
 | Project registry and project status | Done, tested |
 | New-project flow against `vox new` | Done, tested against a fake engine |
